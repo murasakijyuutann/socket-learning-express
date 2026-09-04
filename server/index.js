@@ -26,9 +26,11 @@ httpServer.listen(PORT, () => {
 // Step 2  Connect the server to Socket.IO
 io.on('connection', (socket) => {
     console.log('a user connected:', socket.id);
+    let currentRoom = null; // tracks which room THIS socket is in, across events
 
     socket.on('join-room', (roomId) => {
         socket.join(roomId);
+        currentRoom = roomId; // remember it for later (disconnect needs this)
         console.log(`${socket.id} joined room: ${roomId}`);
 
         // broadcast the user's join to all other users in the room
@@ -37,7 +39,9 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         console.log(`${socket.id} left room`);
-        socket.broadcast.emit('user-left', socket.id);
+        if (currentRoom) {
+            socket.to(currentRoom).emit('user-left', socket.id);
+        }
     });
 });
 
