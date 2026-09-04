@@ -15,7 +15,7 @@ const { Server } = require('socket.io');
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: 'http://localhost:5173' },
+  cors: { origin: '*' },
 });
 
 const PORT = process.env.PORT || 3000;
@@ -24,3 +24,20 @@ httpServer.listen(PORT, () => {
 });
 
 // Step 2  Connect the server to Socket.IO
+io.on('connection', (socket) => {
+    console.log('a user connected:', socket.id);
+
+    socket.on('join-room', (roomId) => {
+        socket.join(roomId);
+        console.log(`${socket.id} joined room: ${roomId}`);
+
+        // broadcast the user's join to all other users in the room
+        socket.to(roomId).emit('user-joined', socket.id);
+    })
+
+    socket.on('disconnect', () => {
+        console.log(`${socket.id} left room`);
+        socket.broadcast.emit('user-left', socket.id);
+    });
+});
+

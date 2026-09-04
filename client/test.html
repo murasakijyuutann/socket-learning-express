@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Socket.IO Test Client</title>
+</head>
+<body>
+  <h2>Socket.IO Test</h2>
+  <input id="roomInput" placeholder="room id" value="room1" />
+  <button id="joinBtn">Join Room</button>
+  <div id="log"></div>
+
+  <!-- loads the client library directly from your running server -->
+  <script src="http://localhost:3000/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io('http://localhost:3000');
+    const log = (msg) => {
+      document.getElementById('log').innerHTML += `<div>${msg}</div>`;
+      console.log(msg);
+    };
+
+    socket.on('connect', () => {
+      log(`connected: ${socket.id}`);
+    });
+
+    socket.on('user-joined', (id) => {
+      log(`user joined: ${id}`);
+    });
+
+    socket.on('user-left', (id) => {
+      log(`user left: ${id}`);
+    });
+
+    socket.on('disconnect', () => {
+      log('disconnected from server');
+    });
+
+    document.getElementById('joinBtn').addEventListener('click', () => {
+      const roomId = document.getElementById('roomInput').value;
+      socket.emit('join-room', roomId);
+      log(`emitted join-room: ${roomId}`);
+    });
+  </script>
+</body>
+</html>
