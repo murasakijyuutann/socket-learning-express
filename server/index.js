@@ -58,7 +58,7 @@ wss.on('connection', (socket, request) => {
             // a convention we're inventing not something the protocol gives us."
             data = JSON.parse(raw.toString());
         } catch (err) {
-            console.loge('bad message, not JSON:', raw.toString());
+            console.error('bad message, not JSON:', raw.toString());
             return;
         }
 
@@ -71,7 +71,7 @@ wss.on('connection', (socket, request) => {
             }
             rooms.get(roomId).add(socket);
 
-            console.log('user joined room: ${roomId}');
+            console.log(`user joined room: ${roomId}`);
             broadcastToRoom(roomId, { type: 'user-joined', username: socket.username }, socket);
         }
 
@@ -99,7 +99,7 @@ function broadcastToRoom(roomId, payload, excludeSocket) {
 
     const message = JSON.stringify(payload);
     for (const client of members) {
-        if (client === excludeSocket && client.readyState === client.OPEN) {
+        if (client !== excludeSocket && client.readyState === client.OPEN) {
             client.send(message);
         }
     }
