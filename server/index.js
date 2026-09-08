@@ -1,61 +1,106 @@
-const express = require('express');
-// express is a web framework for node.js
+const { WebSocketServer } = require('ws');
+// ws is a raw WebSocket library - NOT an abstraction like socket.io
+// There's no event system, no rooms, no auto-reconnect, We build all of that oursevlves.
 
 const { createServer } = require('http');
-/* { createServer } from 'http': Node's built-in HTTP server module. We destructure just
-   the one function we need out of it — similar to a Java static import of a single method
-   from a utility class, rather than referencing the whole module each time. */
+const url = require('url');
 
-const { Server } = require('socket.io');
-/* { Server } from 'socket.io': Socket.IO's main class (capitalized by convention),
-   which we'll `new` up in a second. This is the Socket.IO engine itself. */
+const httpServer = createServer();
 
-const app = express();
-const httpServer = createServer(app);
-const io = new Server(httpServer, {
-  cors: { origin: '*' },
-});
+// Note: no Express, no io.use() middleware system, no io.on('connection'),
+// We attach the WebSocket server directly to the HTTP server.
+
+const wss = new WebSocketServer({ server: httpServer });
 
 const PORT = process.env.PORT || 3000;
 httpServer.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });
 
+// --- "rooms" don't exist in raw WebSockets, We have to build them ourselves. ---
+// A plain JS Map: roomId -> Set of sockets currently in that room.
 
-io.use((socket, next) => {
-  const token = socket.handshake.auth.token;
-  console.log('middleware saw token:', token);
+const rooms = new Map();
 
-  if (!token) {
-    return next(new Error('no token provided'));
-  }
-  
-  // TEMP: fake validation, just checking it's non-empty for now.
-  // Real validation (JWT verify, DB lookup) comes later once auth exists for real.
-  socket.username = token; // stash something on the socket for later use
+wss.on('connection', (socket, request) => {
+    // socket.handshake.auth.token doesn't exist here - Socket.IO invented that conveninence.
+    // In raw WebSocket, the ONLY thing we get at handshake is the HTTP request itself
+    // (headers, URL, query string) - because remember, WebSocket connection start as HTTP.
+    const { query } = url.parse(request.url, true);
+    const token = query.token;
 
-  next(); // allow connection to proceed
-});
-  
+    console.log('handshake received for token:', token);
 
-io.on('connection', (socket) => {
-    console.log('a user connected:', socket.id);
-    let currentRoom = null; // tracks which room THIS socket is in, across events
+    if (!token) {
+        // No built-in `next(new Error('no token provided'))` here - We just close the socket.
+        // ourselves, with a WebSocket close code, before it ever reaches 'message' handling.
+        socket.close(4001, 'no token provided');
+        return;
+    }
 
-    socket.on('join-room', (roomId) => {
-        socket.join(roomId);
-        currentRoom = roomId; // remember it for later (disconnect needs this)
-        console.log(`${socket.id} joined room: ${roomId}`);
+    // No built-in place to "stash" data on the socket like Socket.IO's socket.username -
+    // but a raw ws socket is just a JS objectm so we can still attach our own properties.
+    socket.username = token;
+    socket.currentRoom = null;
 
-        // broadcast the user's join to all other users in the room
-        socket.to(roomId).emit('user-joined', socket.id);
-    })
+    console.log('a user connected');
 
-    socket.on('disconnect', () => {
-        console.log(`${socket.id} left room`);
-        if (currentRoom) {
-            socket.to(currentRoom).emit('user-left', socket.id);
+    // --- No socket.on('eventName', ...) event system exists in raw WebSockets -
+    // There is exactly ONE event for incoming data: 'message', Every single thing.
+    // Socket.IO calls a named "event" (join-room, send-message, etc) at this layer,
+    // just a single incoming message, whose meaning we have to invent and parse ourselves.
+
+    socket.on('message', (raw) => {
+        let data;
+        try {
+            // Raw Websocket sends bytes/strings - not structured events. We chose to send
+            // JSON strings so we CAN have something resembling "event types," but that's
+            // a convention we're inventing not something the protocol gives us."
+            data = JSON.parse(raw.toString());
+        } catch (err) {
+            console.loge('bad message, not JSON:', raw.toString());
+            return;
         }
+
+        if (data.type === 'join-room') {
+            const roomId = data.roomId;
+            socket.currentRoom = roomId;
+
+            if (!rooms.has(roomId)) {
+                rooms.set(roomId, new Set());
+            }
+            rooms.get(roomId).add(socket);
+
+            console.log('user joined room: ${roomId}');
+            broadcastToRoom(roomId, { type: 'user-joined', username: socket.username }, socket);
+        }
+
+
     });
+
+    // 'close' is a raw WebSocket's version of socket.IO's 'disconnect'.
+    socket.on('close', () => {
+        console.log('user disconnected');
+        if (socket.currentRoom) {
+            rooms.get(socket.currentRoom)?.delete(socket);
+            broadcastToRoom(socket.currentRoom, { type: 'user-left', username: socket.username }, socket)
+        }
+        
+    });
+
 });
 
+// socket.io(roomId.emit(...)) doesn't exist. We have to manually loop over
+// every socket we tracked as being "in" that room and send to each one individually.
+
+function broadcastToRoom(roomId, payload, excludeSocket) {
+    const members = rooms.get(roomId);
+    if (!members) return;
+
+    const message = JSON.stringify(payload);
+    for (const client of members) {
+        if (client === excludeSocket && client.readyState === client.OPEN) {
+            client.send(message);
+        }
+    }
+}
