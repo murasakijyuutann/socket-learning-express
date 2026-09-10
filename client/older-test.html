@@ -4,11 +4,11 @@
 <meta charset="UTF-8">
 <title>WebSocket Test Client</title>
 <style>
-    body { font-family: georgia; max-width: 600px; margin: 40px auto; }
+    body { font-family: monospace; max-width: 600px; margin: 40px auto; }
     label { display: block; margin-top: 10px; }
     input { padding: 4px; }
     button { padding: 6px 12px; margin-top: 8px; margin-right: 8px; }
-    #log{
+    #log {
         margin-top: 20px;
         border: 1px solid #ccc;
         padding: 10px;
@@ -23,13 +23,12 @@
 </head>
 <body>
 
-<h2>Raw Websocket Test client</h2>
+<h2>Raw WebSocket Test Client</h2>
 
 <label>
     Username:
     <input id="username" type="text" placeholder="e.g. alice">
 </label>
-
 <label>
     Room ID:
     <input id="roomId" type="text" placeholder="e.g. room1">
@@ -65,33 +64,29 @@
             return;
         }
 
-        /* No socket.handshake.auth on the client side either - the raw
-        Websocket constructor has no options object for headers/auth,
-        so the token has to travel as a query string param, same as
-        the CLI client does with `?token=${username}`.
-        */
-
+        // No socket.handshake.auth on the client side either - the raw
+        // WebSocket constructor has no options object for headers/auth,
+        // so the token has to travel as a query string param, same as
+        // the CLI client does with `?token=${username}`.
         socket = new WebSocket(`ws://localhost:3000/?token=${username}`);
 
-        /* Disable Connect while a connection is open/opening, so a second 
-        click can't spin up a duplicate socket under the same tab.
-        */
-
+        // Disable Connect while a connection is open/opening, so a second
+        // click can't spin up a duplicate socket under the same tab.
         connectBtn.disabled = true;
         usernameInput.disabled = true;
 
         socket.onopen = () => {
             log('connected');
             joinBtn.disabled = false;
-        }
+        };
 
         socket.onmessage = (event) => {
             let data;
             try {
-                /* Mirrors index.js's own try/catch around JSON.parse
-                the server sends JSON strings by convention, not by protocol guarantee,
-                So a malformed payload is a real (if unlikely) possibility here too.*/
-                data = JSON.parse (event.data);
+                // Mirrors index.js's own try/catch around JSON.parse (index.js:66-75) -
+                // the server sends JSON strings by convention, not by protocol guarantee,
+                // so a malformed payload is a real (if unlikely) possibility here too.
+                data = JSON.parse(event.data);
             } catch (err) {
                 log(`received non-JSON message: ${event.data}`);
                 return;
@@ -102,11 +97,14 @@
             } else if (data.type === 'user-left') {
                 log(`user-left: ${data.username}`);
             } else {
-                log(`received: ${JSON.stringify(data)}`)
+                log(`received: ${JSON.stringify(data)}`);
             }
         };
 
         socket.onclose = (event) => {
+            // Matches server/test-client.js's close handler shape:
+            // it logs code and reason.toString() - event.reason here
+            // is already a string, so no .toString() call is needed.
             log(`disconnected: code=${event.code} reason=${event.reason || '(none)'}`);
             connectBtn.disabled = false;
             usernameInput.disabled = false;
@@ -115,9 +113,11 @@
         };
 
         socket.onerror = () => {
+            // Raw WebSocket error events carry no useful detail (no message,
+            // no code) - this is a real limitation of the browser API, not
+            // something we're choosing to skip logging.
             log('connection error');
         };
-        
     });
 
     joinBtn.addEventListener('click', () => {
@@ -126,7 +126,6 @@
             log('enter a room id first');
             return;
         }
-
         if (!socket || socket.readyState !== WebSocket.OPEN) {
             log('not connected');
             return;
@@ -134,11 +133,8 @@
 
         socket.send(JSON.stringify({ type: 'join-room', roomId }));
         log(`sent join-room: ${roomId}`);
-    })
-
-
+    });
 </script>
-
 
 </body>
 </html>
