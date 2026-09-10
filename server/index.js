@@ -22,6 +22,10 @@ httpServer.listen(PORT, () => {
 
 const rooms = new Map();
 
+// Tracks which socket currently "owns" a given token, so the same token
+// can't be live on two connections at once (e.g. two tabs both claiming "Bob").
+const tokenToSocket = new Map();
+
 wss.on('connection', (socket, request) => {
     // socket.handshake.auth.token doesn't exist here - Socket.IO invented that conveninence.
     // In raw WebSocket, the ONLY thing we get at handshake is the HTTP request itself
@@ -37,6 +41,14 @@ wss.on('connection', (socket, request) => {
         socket.close(4001, 'no token provided');
         return;
     }
+
+    // --- Prevent the same token from being connected twice at once ---
+    const existing = tokenToSocket.get(token);
+    if (existing && existing.readyState === existing.OPEN) {
+        socket.close(4002, 'token already connected');
+        return;
+    }
+    tokenToSocket.set(token, socket);
 
     // No built-in place to "stash" data on the socket like Socket.IO's socket.username -
     // but a raw ws socket is just a JS objectm so we can still attach our own properties.
@@ -64,6 +76,14 @@ wss.on('connection', (socket, request) => {
 
         if (data.type === 'join-room') {
             const roomId = data.roomId;
+
+            // A socket can only be in one room at a time - switching rooms means
+            // leaving the old one first, so it's never a member of both at once.
+            if (socket.currentRoom && socket.currentRoom !== roomId) {
+                rooms.get(socket.currentRoom)?.delete(socket);
+                broadcastToRoom(socket.currentRoom, { type: 'user-left', username: socket.username }, socket);
+            }
+
             socket.currentRoom = roomId;
 
             if (!rooms.has(roomId)) {
@@ -85,7 +105,10 @@ wss.on('connection', (socket, request) => {
             rooms.get(socket.currentRoom)?.delete(socket);
             broadcastToRoom(socket.currentRoom, { type: 'user-left', username: socket.username }, socket)
         }
-        
+        // Free up the token so a future connection can reuse it.
+        if (tokenToSocket.get(token) === socket) {
+            tokenToSocket.delete(token);
+        }
     });
 
 });
