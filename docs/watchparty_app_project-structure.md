@@ -4,13 +4,20 @@
 
 **Repository:** `socket-learning/`. This document is the only architecture document. Older docs (the AWS Lambda/DynamoDB setup and the earlier playback-sync map) were removed and are superseded.
 
-**UI references:** the design mockups live in [`docs/watchpartySS/`](./watchpartySS/):
-- [Viewer — watch room with live bet](./watchpartySS/Viewer%20—%20watch%20room%20with%20live%20bet@2x.png)
-- [Bet window collapsed — chat takes the rail](./watchpartySS/Bet%20window%20collapsed%20—%20chat%20takes%20the%20rail@2x.png)
-- [Bet window expanded — chat shrinks](./watchpartySS/Bet%20window%20expanded%20—%20chat%20shrinks@2x.png)
+**UI references:** the design mockups live in [`docs/watchpartySS/`](./watchpartySS/). Export them from the design canvas with these names.
+
+Current:
+- [Sign up — availability checks](./watchpartySS/Sign%20up%20—%20availability%20checks@2x.png)
+- [Verify your email](./watchpartySS/Verify%20your%20email@2x.png)
+- [Watch room — live bets, team totals, double-down calls](./watchpartySS/Watch%20room%20—%20live%20bets,%20team%20totals,%20double-down%20calls@2x.png)
+- [Daily lucky box](./watchpartySS/Daily%20lucky%20box@2x.png) (a pop-up over the watch room)
+- [Bet window lifecycle — every state](./watchpartySS/Bet%20window%20lifecycle%20—%20every%20state@2x.png)
 - [Admin — open and settle betting windows](./watchpartySS/Admin%20—%20open%20and%20settle%20betting%20windows@2x.png)
-- [Theme sample](./watchpartySS/Theme%20sample@2x.png)
-- [ERD — economy and betting](./watchpartySS/Watch-party%20ERD_%20economy%20and%20betting.png)
+- [Admin — rooms, playback, renames](./watchpartySS/Admin%20—%20rooms,%20playback,%20renames@2x.png)
+- [Theme sample](./watchpartySS/Theme%20sample@2x.png) and [Theme additions](./watchpartySS/Theme%20additions@2x.png)
+- [ERD v2 — economy, betting, rooms / accounts and safety](./watchpartySS/Watch-party%20ERD%20v2.png). There are two `USER` boxes on purpose: each diagram shows the same table with the columns relevant to it. The **Database** table in this document is the source of truth.
+
+Superseded (kept for reference only; don't build from them): "Viewer — watch room with live bet", "Bet window collapsed — chat takes the rail" and "Bet window expanded — chat shrinks". They predate live bets, admin-only playback and the lucky box, and show navigation and panels that aren't in the file tree. The collapse/expand behaviour they show still applies.
 
 ## Revisions
 
@@ -52,6 +59,16 @@
   - **Name rules:** login ID and nickname allow English letters and digits only; the nickname "Admin" is reserved (any letter case) for the admin account.
   - **Sign-up collisions:** two sign-ups claiming the same login ID, nickname or email less than 1 second apart both fail with `F'mglw'nafl throd n'gha`.
   - **Email:** only exact duplicates count; Gmail-variant flagging and `emailAbuseCanonical` are removed.
+- 2026-09-30, fourth review:
+  - **Collision fix:** a request that detects a collision marks its claims `FAILED` instead of deleting them, so both sides really fail.
+  - **Double-down message:** stored as a structured event and rendered with `<Nickname>`, so renames apply to old messages.
+  - **Unverified accounts:** can log in only to a "verify your email" screen, and are deleted after 24 hours.
+  - **Protocol:** the snapshot includes the window's bets and team totals; `room:presence` added.
+  - **Betting:** short option codes; a full window transition table; the admin can't bet on windows he settles; net profit/loss shown everywhere.
+  - **Admin form:** market types and templates dropped; windows are always announced in chat; custom durations from 10 seconds to 10 minutes.
+  - **Sign-up:** stays open to anyone with a verified email; "friends-only" wording removed from the UI.
+  - **Lucky box:** a pop-up from the header chip until the Wallet page exists.
+  - **Housekeeping:** `TWITCH_PARENT_DOMAINS`, updated mockup links, superseded mockups marked.
 
 ## Principles
 
@@ -131,7 +148,8 @@ socket-learning/
 │       ├── messages/                 # namespaced: <feature>:<verb>
 │       │   ├── client.ts             # every client message: { action, requestId, payload }
 │       │   │                         #   room:join, chat:send, playback:load/play/pause/seek,
-│       │   │                         #   window:open/lock/extend/settle/void, bet:place,
+│       │   │                         #   window:open/lock/extend/settle/void (void works
+│       │   │                         #   from OPEN or LOCKED), bet:place,
 │       │   │                         #   bonus:open_lucky_box, wallet:transfer
 │       │   └── server.ts             # replies echo requestId: bet:accepted, bet:rejected,
 │       │                             #   error { requestId, code, message }
@@ -140,14 +158,15 @@ socket-learning/
 │       │                             #   window:opened/extended/locked/settled/voided,
 │       │                             #   bet:placed (instant, one per bet: nickname, pick,
 │       │                             #   stake, doubled — feeds the live bet list),
-│       │                             #   chat:message kind system for a double-down:
-│       │                             #   "<nickname> used double down on <option>!",
+│       │                             #   chat:message kind event (see chat.ts),
+│       │                             #   room:presence { watching } (unique users,
+│       │                             #   sent on join/leave, ≤ 1 per 2s per room),
 │       │                             #   window:odds (per-team totals + odds,
 │       │                             #   ≤ 1 per second per window),
 │       │                             #   balance:updated (ledgerTxId), user:profile_updated
 │       ├── errors.ts                 # error codes: INSUFFICIENT_BALANCE, WINDOW_CLOSED,
 │       │                             #   LOGIN_ID_TAKEN, NICKNAME_TAKEN, EMAIL_TAKEN,
-│       │                             #   SIGNUP_COLLISION,
+│       │                             #   SIGNUP_COLLISION, EMAIL_NOT_VERIFIED, ADMIN_CANNOT_BET,
 │       │                             #   RATE_LIMITED, FORBIDDEN, VALIDATION, NOT_FOUND, …
 │       ├── limits.ts                 # shared numbers (see "Protocol limits")
 │       ├── schemas/                  # zod validators per message
@@ -156,7 +175,11 @@ socket-learning/
 │       │                             #   (any case); email; password (8+ chars) —
 │       │                             #   the same rules on the client and the server
 │       └── domain/
-│           ├── chat.ts               # ChatMessage = user | system | game (by kind)
+│           ├── chat.ts               # ChatMessage = user | system | event | game (by kind)
+│           │                         #   event = structured, no stored names:
+│           │                         #   { event: "double_down", userId, windowId, optionId }
+│           │                         #   { event: "window_opened", windowId }
+│           │                         #   rendered with <Nickname> and the option's code
 │           ├── profile.ts            # DisplayProfile { userId, nickname, (later) cosmetics }
 │           ├── playback.ts           # VideoSource YOUTUBE | TWITCH; PlaybackState
 │           ├── betting.ts            # BettingWindow, WindowOption, Bet, WindowStatus, Resolution
@@ -184,6 +207,8 @@ socket-learning/
 │       │   └── ui/
 │       └── features/
 │           ├── auth/
+│           │   ├── VerifyGate.tsx    # the only screen an unverified user can reach:
+│           │   │                     #   resend link, change email, log out
 │           │   ├── RegisterPage.tsx  # top-of-page error banner (red text)
 │           │   ├── AvailabilityField.tsx  # input + "Check availability" button +
 │           │   │                          #   green V / red X message
@@ -225,11 +250,15 @@ socket-learning/
 │           │   ├── useBetDraft.ts
 │           │   └── useBettingWindow.ts
 │           ├── bonus/
-│           │   └── LuckyBox.tsx      # daily box; the animation reveals the server's result
+│           │   ├── LuckyBoxChip.tsx  # header chip: "Daily box ready" / next-box countdown
+│           │   └── LuckyBoxDialog.tsx   # pop-up opened by the chip (no page of its own
+│           │                            #   until the Wallet page exists in phase 4)
 │           ├── wallet/               # balance, TransferDialog, history
 │           ├── moderation/           # report button
 │           ├── admin/                # rooms (create, set video source), playback controls,
-│           │                         #   betting windows (open/lock/settle/void, stale list),
+│           │                         #   betting windows (question, options with label +
+│           │                         #   code + colour, duration presets or custom 10s–10m,
+│           │                         #   lock/extend/settle/void, stale list),
 │           │                         #   users (IP history, shared-IP accounts),
 │           │                         #   flags queue, transfers log, mute/kick/ban
 │           ├── (later) leaderboard/
@@ -282,7 +311,7 @@ socket-learning/
         │   │   │                     #   first submit's result; sign-up rate limit per IP;
         │   │   │                     #   Tor → reject; shared IP → flag
         │   │   ├── verify-email.ts   # single-use, expiring token; on first verification:
-        │   │   │                     #   SIGNUP_GRANT 5,000 HOUSE→USER
+        │   │   │                     #   SIGNUP_GRANT 5,000 HOUSE→USER; resend (rate-limited)
         │   │   ├── login.ts          # loginId + password; rate limit; AuthEvent;
         │   │   │                     #   Set-Cookie session (HttpOnly, Secure in prod,
         │   │   │                     #   SameSite=Lax); banned → rejected
@@ -291,7 +320,8 @@ socket-learning/
         │   │   ├── find-id.ts        # emails the loginId; generic reply either way
         │   │   └── password-reset.ts # single-use token; generic reply;
         │   │                         #   success deletes all of the user's sessions
-        │   └── ws-ticket.ts          # valid session → single-use 30s ticket
+        │   └── ws-ticket.ts          # valid session AND verified email → single-use 30s
+        │                             #   ticket; unverified → 403 EMAIL_NOT_VERIFIED
         │                             #   (in-memory Map; fine for a single instance)
         ├── security/                 # prevention: things that are blocked
         │   ├── client-ip.ts          # trust X-Forwarded-For only from our proxy;
@@ -340,7 +370,9 @@ socket-learning/
         │   │                         #   (admin only, logged) is the only way to change one
         │   ├── betting/
         │   │   ├── index.ts          # window:* (admin only), bet:place;
-        │   │   │                     #   snapshot = activeWindow + myBet
+        │   │   │                     #   snapshot = activeWindow + options (label, code,
+        │   │   │                     #   colour) + team totals + the window's bets (the
+        │   │   │                     #   feed, newest 50) + myBet
         │   │   ├── windows.ts        # open (one OPEN per room; ≥ 2 options, unique
         │   │   │                     #   labels, allowlisted colours); extend while OPEN
         │   │   ├── lock-window.ts    # SELECT … FOR UPDATE (tx.$queryRaw)
@@ -387,7 +419,9 @@ socket-learning/
         │   │   ├── new-account-transfer.ts
         │   │   ├── (later) vpn.ts
         │   │   └── (later) fingerprint.ts
-        │   └── retention.ts          # deletes AuthEvent rows older than 90 days
+        │   └── retention.ts          # deletes AuthEvent rows older than 90 days;
+        │                             #   deletes accounts still unverified after 24h
+        │                             #   (frees their login ID, nickname and email)
         └── (later) jobs/
             ├── sync-matches.ts       # OpenDota results for EXTERNAL windows
             └── score-fantasy.ts
@@ -416,6 +450,7 @@ TRUST_PROXY=false
 SMTP_HOST=localhost
 SMTP_PORT=1025              # Mailpit; its web UI is on :8025
 MAIL_FROM=watchparty@localhost
+TWITCH_PARENT_DOMAINS=localhost   # comma-separated; Twitch embeds require parent=<domain>
 ADMIN_LOGIN_ID=
 ADMIN_EMAIL=
 ADMIN_PASSWORD=
@@ -437,25 +472,27 @@ ADMIN_PASSWORD=
 | VOD sync | The server stores the state; each client computes the expected position as `positionSec + (serverNow − positionUpdatedAt)` while playing, checks its player every 3s, and seeks if it's more than 1.5s off. There's no periodic server broadcast. |
 | Live sync | Everyone watches the same channel, and there's no position sync. Live streams can't be seeked, and each viewer's stream delay differs slightly. |
 | Ordering | Every `playback:state` carries `playbackVersion`; older states are ignored |
+| Twitch embeds | Twitch requires a `parent=<domain>` parameter matching the site; the allowed domains come from `TWITCH_PARENT_DOMAINS` |
+| Viewer count | `room:presence { watching }` counts unique users in the room, not sockets (two tabs count once). Sent on join and leave, at most once every 2 seconds per room. |
 
 ## Database (PostgreSQL)
 
 | Table | Key fields and constraints |
 |---|---|
-| `User` | `loginId` (4–20 chars, English letters and digits), `nickname` (2–16 chars, English letters and digits, permanent), `emailNormalized` (unique, recovery), `emailVerifiedAt`, argon2id hash, `role` (`ADMIN` / `USER`), `balance` (`Int`, cached; can be negative), `bannedAt`. `loginId` and `nickname` are unique case-insensitively (unique indexes on `lower(...)`, added in a raw SQL migration). |
+| `User` | `loginId` (4–20 chars, English letters and digits), `nickname` (2–16 chars, English letters and digits, permanent), `emailNormalized` (unique, recovery), `emailVerifiedAt`, argon2id hash, `role` (`ADMIN` / `USER`), `createdAt`, `balance` (`Int`, cached; can be negative), `bannedAt`. `loginId` and `nickname` are unique case-insensitively (unique indexes on `lower(...)`, added in a raw SQL migration). |
 | `Session` | `id` (stored hashed), `userId`, `expiresAt` (30 days, sliding), `lastSeenAt`, `ip`, `userAgent`; deleted on logout, password reset and ban |
 | `Room` | `name`, `createdById` (the admin), `source`, `sourceRef`, `isLive`, `isPlaying`, `positionSec`, `positionUpdatedAt`, `playbackVersion` |
 | `LedgerTx` | `id` (auto-increment; also the ordering key for `balance:updated`), `reason` (`SIGNUP_GRANT` / `LUCKY_BOX` / `BET_STAKE` / `BET_PAYOUT` / `BET_BONUS` / `BET_PENALTY` / `BET_REFUND` / `ROUNDING` / `TRANSFER` / …), `refId`, `createdAt`; unique `(reason, refId)` |
 | `LedgerEntry` | `txId`, `account` (`USER:<id>` / `HOUSE` / `ESCROW:<ref>` / `SHOP`), `amount`; the entries of a tx sum to 0 |
 | `BettingWindow` | `roomId`, `question`, `status`, `resolution`, `closesAt`, `minStake`, `maxStake`, `allowDoubleDown`, `winnerOptionId`, `resolver`, `resolutionRef`, `resolvedByUserId`, `resolvedAt`, `version`; one `OPEN` per room (raw SQL partial index) |
-| `WindowOption` | `windowId`, `label`, `color`, (later) `externalRef` for mapping to match results; unique `(windowId, id)`, unique `(windowId, label)` |
+| `WindowOption` | `windowId`, `label`, `code` (2–4 uppercase letters or digits, e.g. `KES`; unique per window), `color`, (later) `externalRef` for mapping to match results; unique `(windowId, id)`, unique `(windowId, label)` |
 | `Bet` | `windowId`, `optionId`, `userId`, `stake`, `doubleDown`, `basePayout`, `bonusPayout`, `lossPenalty`, `requestId`; unique `(windowId, userId)`, unique `(userId, requestId)`; composite FK `(windowId, optionId) → WindowOption(windowId, id)` |
 | `PendingDoubleDown` | `userId` (unique), `betId`; deleted on settle or void |
 | `DailyUse` | `userId`, `kind` (`DOUBLE_DOWN` / `LUCKY_BOX` / …), `day` (Postgres `date`, Tokyo calendar), `refId`; unique `(userId, kind, day)` |
 | `AuthEvent` | `userId`, `kind`, `ip` (IPv6 as /64), `userAgent`, `createdAt`; deleted after 90 days |
 | `EmailToken` | `userId`, `purpose` (`VERIFY` / `RESET` / `FIND_ID`), `tokenHash`, `expiresAt`, `usedAt` |
 | `Flag` | `kind`, `userId`, `evidence` (JSON), `status`, `reviewedBy` |
-| `SignupClaim` | `field` (`LOGIN_ID` / `NICKNAME` / `EMAIL`), `valueKey` (lowercased login ID/nickname, normalized email), `formToken`, `claimedAt` (DB clock); unique `(field, valueKey, formToken)`; deleted when the sign-up finishes; rows older than 1 minute are swept |
+| `SignupClaim` | `field` (`LOGIN_ID` / `NICKNAME` / `EMAIL`), `valueKey` (lowercased login ID/nickname, normalized email), `formToken`, `status` (`ACTIVE` / `FAILED`), `claimedAt` (DB clock); unique `(field, valueKey, formToken)`; deleted after a successful sign-up; `FAILED` and leftover rows are swept after 1 minute |
 | `NicknameChange` | `userId`, `oldNickname`, `newNickname`, `byAdminId`, `reason`, `changedAt` (audit log of admin renames) |
 | `ModerationAction` | `userId`, `kind` (`MUTE` / `KICK` / `BAN`), `until`, `reason`, `byAdminId` |
 | `Report` | `reporterId`, `targetUserId`, `reason`, `status`, plus an evidence snapshot: `roomId`, `messageId`, `messageText`, `messageCreatedAt`, `reportedAt` |
@@ -488,12 +525,22 @@ Two different people submitting sign-ups that share any of the three values (log
 | 1 | Validates the format and checks that none of the three values belongs to an existing account (normal "already taken" if one does) |
 | 2 | Inserts a `SignupClaim` for each of the three values, stamped with the database clock |
 | 3 | Waits 1 second |
-| 4 | Looks for claims on the same values from a **different** `formToken` less than 1 second apart from its own. If any exist, deletes its own claims and fails with `SIGNUP_COLLISION`. The other request finds this claim in the same way and fails too. |
-| 5 | Otherwise creates the account in a transaction (the unique indexes still decide any remaining race) and deletes its claims |
+| 4 | Looks for claims (`ACTIVE` or `FAILED`) on the same values from a **different** `formToken` less than 1 second apart from its own. If any exist, it marks its own claims `FAILED` — it does **not** delete them — and fails with `SIGNUP_COLLISION`. The other request still finds these claims when it checks, so it fails too, whichever of the two checks first. |
+| 5 | Otherwise creates the account in a transaction (the unique indexes still decide any remaining race) and deletes its claims. Failed claims are left for the 1-minute sweep. |
 
 - **Same form, repeat submits:** the register page generates a `formToken` when it loads. A double-click sends the same token twice; the second request waits for and returns the first one's result, so a person can never collide with themselves.
 - **Cost:** every sign-up takes about 1 second longer.
 - **After a collision:** nothing was created, so both people can simply try again.
+
+### Unverified accounts
+
+| Rule | Decision |
+|---|---|
+| Logging in | Allowed, but the only screen is "Verify your email": resend the link (rate-limited), change the email, or log out |
+| Watching, chatting, betting | Not allowed. `/auth/ws-ticket` refuses unverified users (`EMAIL_NOT_VERIFIED`), so they can't open a socket. |
+| Starting points | None until verification (the 5,000 grant happens on verification) |
+| Cleanup | Accounts still unverified 24 hours after sign-up are deleted by `abuse/retention.ts`, which frees their login ID, nickname and email |
+| Sign-up policy | Open to anyone with a verified email. The UI doesn't describe the app as "friends-only". |
 
 ## Economy
 
@@ -502,6 +549,7 @@ Two different people submitting sign-ups that share any of the three values (log
 | Starting points | **5,000**, granted `HOUSE → USER` (`SIGNUP_GRANT`) when the email is verified for the first time, not at sign-up, so unverified bot accounts get nothing |
 | Daily lucky box | Once per user per Tokyo calendar day (`DailyUse` kind `LUCKY_BOX`). The server draws a uniform random whole number from **10 to 10,000** (`crypto.randomInt(10, 10001)`) and pays it `HOUSE → USER`. The client animation only reveals the server's result. The average is about 5,000 a day. |
 | Lucky box when negative | Allowed; it's the main way to climb back above 0 |
+| Where it lives | A header chip ("Daily box ready" or a countdown to the next box) opens a pop-up over the current page. It moves into the Wallet page once that exists (phase 4). |
 | Non-user accounts | `HOUSE`, `ESCROW:<ref>` and `SHOP` have no stored balance; they're computed by summing `LedgerEntry`. `HOUSE` is expected to go negative, because it funds sign-up grants, lucky boxes and double-down bonuses. |
 | Reconciliation | `server/scripts/reconcile.ts` checks that every `User.balance` equals its ledger sum and that every settled or voided window's escrow is 0. It runs in the test suite and can be run by hand. |
 | Balance type | `Int` (up to about 2.1 billion) |
@@ -511,6 +559,9 @@ Two different people submitting sign-ups that share any of the three values (log
 | Rule | Decision |
 |---|---|
 | Who runs windows | The admin opens, locks, extends, settles and voids. Anyone verified can bet. |
+| Admin betting | The admin can't bet on `ADMIN`-resolved windows, because he decides the result (`ADMIN_CANNOT_BET`). He can bet on `RNG` and `EXTERNAL` windows (later features). |
+| Opening a window | Question, 2 or more options (label, short code, colour), duration (30s / 60s / 2m / 5m presets, or custom from 10 seconds to 10 minutes), min and max stake, double down allowed or not. Every window is announced in chat automatically. No market types or templates. |
+| Option codes | Every option has a 2–4 character uppercase code (`KES`, `OBS`, `YES`, `NO`), used in the collapsed bar, the bet feed and chat events |
 | Bets per window | One per user, no edits after placing, one option only |
 | Base return | `stake × odds`, where odds = total pool ÷ pool on the winning option (parimutuel). Shown as an estimate while open; final at lock. |
 | Double down (2× return boost) | Win: `stake × odds × 2`. Lose: `stake × 2`. This is intentional: it doubles the whole return, not just the profit. The stake is deducted when placing; the second stake is a penalty at settlement. Only the stake counts in the pool. Once per Tokyo day (`DailyUse`), and only one unresolved double-down per user (`PendingDoubleDown`). Restored if the window is voided. |
@@ -523,8 +574,10 @@ Two different people submitting sign-ups that share any of the three values (log
 | Exact odds | Payouts use the exact pool ratio, not the rounded odds on screen |
 | No winning bets | Settlement takes the void path, and everyone is refunded |
 | Open windows | At most one `OPEN` per room, enforced in the database |
+| Transitions | Only these are allowed:<br>• `OPEN → LOCKED` (timer reaches `closesAt`, or the admin locks early)<br>• `OPEN → VOID` (the admin cancels; everyone is refunded)<br>• `LOCKED → SETTLED` (the admin picks the winner)<br>• `LOCKED → VOID` (the admin voids; everyone is refunded)<br>• Extend: only while `OPEN`<br>`SETTLED` and `VOID` are final. |
+| Result display | Always **net** profit or loss: a win shows `+(return − stake)`, a normal loss `−stake`, a doubled loss `−2 × stake`. Example: 1,000 doubled at 1.72x wins `+2,440` (3,440 returned) or loses `−2,000`. |
 | Stale windows | A window `LOCKED` for more than 24 hours is marked stale in the admin view. The admin settles or voids it; nothing is voided automatically. |
-| Bet visibility | Always public, live. Each bet appears in the bet feed the moment it's accepted (`bet:placed`: nickname, pick, stake, doubled). When a bet uses double down, everyone immediately sees `"<nickname> used double down on <option>!"` (for example "Kaz used double down on OBS!") in the bet feed and as a system message in chat. Per-team point totals, bettor counts and odds refresh at most once a second (`window:odds`). Later bettors can follow the crowd; that's intended. |
+| Bet visibility | Always public, live. Each bet appears in the bet feed the moment it's accepted (`bet:placed`: userId, option, stake, doubled). A double-down also posts a chat **event** `{ event: "double_down", userId, windowId, optionId }`, rendered as "Kaz used double down on OBS!" with `<Nickname>` and the option code, so an admin rename updates old messages too. Per-team point totals, bettor counts and odds refresh at most once a second (`window:odds`). A viewer who joins mid-window gets the bets and totals in the snapshot. Later bettors can follow the crowd; that's intended. |
 | Time | The server/DB clock decides; clients get `serverTime` + `closesAt` once and count down locally |
 | Settlement authority | `ADMIN`: admin handler only. `RNG`: game engine only. `EXTERNAL`: match-sync job only. |
 | Concurrency | Window row, then user rows sorted by id, then ledger inserts. Checked debits. Retry on `40P01` / `40001`. Settlement transactions use a 15s timeout (Prisma's default is 5s). |
@@ -616,8 +669,8 @@ Nothing past phase 2 is built until a watch party and a betting window work end 
 **Phase 1: core MVP**
 0. Dev setup: root workspaces, `shared/`, TypeScript, docker-compose, `.env.example`, Vite proxy, Vitest, ESLint. Remove the old Express/Socket.IO dependencies from `server/`.
 1. `ws/` core (upgrade, dispatch with `requestId` echo, the feature registry, snapshot ordering) and chat with room `seq`, using a temporary dev identity. This is a TypeScript port of the earlier `socket-learning` server, reshaped as the first registered feature.
-2. Auth: sign-up with the three availability checks, email verification (Mailpit), login and cookie sessions, logout, password reset, find ID, CSRF origin checks, `AuthEvent`, the Tor block, the ws ticket, the admin seed, and profiles with `<Nickname>`.
-3. Rooms (admin creates them) and reconnect handling.
+2. Auth: sign-up with the three availability checks, email verification (Mailpit) with the verify-email gate and 24-hour cleanup, login and cookie sessions, logout, password reset, find ID, CSRF origin checks, `AuthEvent`, the Tor block, the ws ticket, the admin seed, and profiles with `<Nickname>`.
+3. Rooms (admin creates them), `room:presence` and reconnect handling.
 4. Playback: YouTube first, then Twitch.
 
 **Phase 2: centerpiece**
