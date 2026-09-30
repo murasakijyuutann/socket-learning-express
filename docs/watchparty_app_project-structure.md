@@ -4,20 +4,21 @@
 
 **Repository:** `socket-learning/`. This document is the only architecture document. Older docs (the AWS Lambda/DynamoDB setup and the earlier playback-sync map) were removed and are superseded.
 
-**UI references:** the design mockups live in [`docs/watchpartySS/`](./watchpartySS/). Export them from the design canvas with these names.
+**UI references:** the design mockups are exported as one file, [`docs/watchpartySS/Watch-party betting UI.pdf`](./watchpartySS/Watch-party%20betting%20UI.pdf) (the `.html` next to it is the same design as a self-unpacking bundle; open it in a browser). Pages:
 
 Current:
-- [Sign up — availability checks](./watchpartySS/Sign%20up%20—%20availability%20checks@2x.png)
-- [Verify your email](./watchpartySS/Verify%20your%20email@2x.png)
-- [Watch room — live bets, team totals, double-down calls](./watchpartySS/Watch%20room%20—%20live%20bets,%20team%20totals,%20double-down%20calls@2x.png)
-- [Daily lucky box](./watchpartySS/Daily%20lucky%20box@2x.png) (a pop-up over the watch room)
-- [Bet window lifecycle — every state](./watchpartySS/Bet%20window%20lifecycle%20—%20every%20state@2x.png)
-- [Admin — open and settle betting windows](./watchpartySS/Admin%20—%20open%20and%20settle%20betting%20windows@2x.png)
-- [Admin — rooms, playback, renames](./watchpartySS/Admin%20—%20rooms,%20playback,%20renames@2x.png)
-- [Theme sample](./watchpartySS/Theme%20sample@2x.png) and [Theme additions](./watchpartySS/Theme%20additions@2x.png)
-- [ERD v2 — economy, betting, rooms / accounts and safety](./watchpartySS/Watch-party%20ERD%20v2.png). There are two `USER` boxes on purpose: each diagram shows the same table with the columns relevant to it. The **Database** table in this document is the source of truth.
+- p. 7 — Sign up, availability checks
+- p. 12 — Verify your email
+- p. 8 — Watch room: live bets, team totals, double-down calls
+- p. 9 — Daily lucky box (a pop-up over the watch room)
+- p. 6 — Bet window lifecycle, every state
+- p. 2 — Admin: open and settle betting windows
+- p. 10 — Admin: rooms, playback, renames
+- p. 3 — Theme sample; p. 11 — Theme additions
 
-Superseded (kept for reference only; don't build from them): "Viewer — watch room with live bet", "Bet window collapsed — chat takes the rail" and "Bet window expanded — chat shrinks". They predate live bets, admin-only playback and the lucky box, and show navigation and panels that aren't in the file tree. The collapse/expand behaviour they show still applies.
+Superseded (pp. 1, 4, 5; kept for reference only, don't build from them): "Viewer — watch room with live bet", "Bet window collapsed — chat takes the rail" and "Bet window expanded — chat shrinks". They predate live bets, admin-only playback and the lucky box, and show navigation and panels that aren't in the file tree. The collapse/expand behaviour they show still applies.
+
+**ERD:** the Mermaid diagrams under [Database](#database-postgresql) are the reference, next to the table they describe. The older design-tool export, [`docs/Watch-party ERD_ economy and betting.pdf`](./Watch-party%20ERD_%20economy%20and%20betting.pdf), is kept for layout only and is missing columns; don't build from it.
 
 ## Revisions
 
@@ -69,6 +70,12 @@ Superseded (kept for reference only; don't build from them): "Viewer — watch r
   - **Sign-up:** stays open to anyone with a verified email; "friends-only" wording removed from the UI.
   - **Lucky box:** a pop-up from the header chip until the Wallet page exists.
   - **Housekeeping:** `TWITCH_PARENT_DOMAINS`, updated mockup links, superseded mockups marked.
+- 2026-09-30, fifth review:
+  - **Timestamps:** `BettingWindow.createdAt` / `lockedAt`, `Bet.createdAt`, `Room.createdAt` and `Flag.createdAt`. Stale windows are measured from `lockedAt`; the bet feed sorts by `Bet.createdAt`; "Locked at …" shows wall-clock time.
+  - **Change email:** an unverified user can change their email from the verify screen (`POST /auth/change-email`); resend and change-email limits added.
+  - **Deletes:** cascade rules for the 24-hour unverified-account cleanup.
+  - **ERD:** Mermaid diagrams in this document replace the PDF export as the reference.
+  - **Mockup links:** point at the pages of `Watch-party betting UI.pdf`.
 
 ## Principles
 
@@ -139,8 +146,9 @@ socket-learning/
 ├── README.md                         # how to run: see "Dev setup" below
 │
 ├── docs/
-│   ├── watchparty_app_project-structure.md   # ★ this document
-│   └── watchpartySS/                 # UI mockups and ERD images
+│   ├── watchparty_app_project-structure.md   # ★ this document (includes the ERD)
+│   ├── Watch-party ERD_ economy and betting.pdf  # older ERD export, layout only
+│   └── watchpartySS/                 # Watch-party betting UI .pdf / .html mockups
 │
 ├── shared/                           # NEW ★ message contract, used by both sides
 │   ├── package.json                  # name "@watchparty/shared"
@@ -312,6 +320,9 @@ socket-learning/
         │   │   │                     #   Tor → reject; shared IP → flag
         │   │   ├── verify-email.ts   # single-use, expiring token; on first verification:
         │   │   │                     #   SIGNUP_GRANT 5,000 HOUSE→USER; resend (rate-limited)
+        │   │   ├── change-email.ts   # unverified users only: new address must be free →
+        │   │   │                     #   update emailNormalized → mark old VERIFY tokens used
+        │   │   │                     #   → send a new link; rate-limited
         │   │   ├── login.ts          # loginId + password; rate limit; AuthEvent;
         │   │   │                     #   Set-Cookie session (HttpOnly, Secure in prod,
         │   │   │                     #   SameSite=Lax); banned → rejected
@@ -481,17 +492,17 @@ ADMIN_PASSWORD=
 |---|---|
 | `User` | `loginId` (4–20 chars, English letters and digits), `nickname` (2–16 chars, English letters and digits, permanent), `emailNormalized` (unique, recovery), `emailVerifiedAt`, argon2id hash, `role` (`ADMIN` / `USER`), `createdAt`, `balance` (`Int`, cached; can be negative), `bannedAt`. `loginId` and `nickname` are unique case-insensitively (unique indexes on `lower(...)`, added in a raw SQL migration). |
 | `Session` | `id` (stored hashed), `userId`, `expiresAt` (30 days, sliding), `lastSeenAt`, `ip`, `userAgent`; deleted on logout, password reset and ban |
-| `Room` | `name`, `createdById` (the admin), `source`, `sourceRef`, `isLive`, `isPlaying`, `positionSec`, `positionUpdatedAt`, `playbackVersion` |
+| `Room` | `name`, `createdById` (the admin), `source`, `sourceRef`, `isLive`, `isPlaying`, `positionSec`, `positionUpdatedAt`, `playbackVersion`, `createdAt` |
 | `LedgerTx` | `id` (auto-increment; also the ordering key for `balance:updated`), `reason` (`SIGNUP_GRANT` / `LUCKY_BOX` / `BET_STAKE` / `BET_PAYOUT` / `BET_BONUS` / `BET_PENALTY` / `BET_REFUND` / `ROUNDING` / `TRANSFER` / …), `refId`, `createdAt`; unique `(reason, refId)` |
 | `LedgerEntry` | `txId`, `account` (`USER:<id>` / `HOUSE` / `ESCROW:<ref>` / `SHOP`), `amount`; the entries of a tx sum to 0 |
-| `BettingWindow` | `roomId`, `question`, `status`, `resolution`, `closesAt`, `minStake`, `maxStake`, `allowDoubleDown`, `winnerOptionId`, `resolver`, `resolutionRef`, `resolvedByUserId`, `resolvedAt`, `version`; one `OPEN` per room (raw SQL partial index) |
+| `BettingWindow` | `roomId`, `question`, `status`, `resolution`, `closesAt`, `minStake`, `maxStake`, `allowDoubleDown`, `winnerOptionId`, `resolver`, `resolutionRef`, `resolvedByUserId`, `resolvedAt`, `createdAt`, `lockedAt` (set on `OPEN → LOCKED`; stale windows are measured from it), `version`; one `OPEN` per room (raw SQL partial index) |
 | `WindowOption` | `windowId`, `label`, `code` (2–4 uppercase letters or digits, e.g. `KES`; unique per window), `color`, (later) `externalRef` for mapping to match results; unique `(windowId, id)`, unique `(windowId, label)` |
-| `Bet` | `windowId`, `optionId`, `userId`, `stake`, `doubleDown`, `basePayout`, `bonusPayout`, `lossPenalty`, `requestId`; unique `(windowId, userId)`, unique `(userId, requestId)`; composite FK `(windowId, optionId) → WindowOption(windowId, id)` |
+| `Bet` | `windowId`, `optionId`, `userId`, `stake`, `doubleDown`, `basePayout`, `bonusPayout`, `lossPenalty`, `requestId`, `createdAt` (orders the bet feed, newest first); unique `(windowId, userId)`, unique `(userId, requestId)`; composite FK `(windowId, optionId) → WindowOption(windowId, id)` |
 | `PendingDoubleDown` | `userId` (unique), `betId`; deleted on settle or void |
 | `DailyUse` | `userId`, `kind` (`DOUBLE_DOWN` / `LUCKY_BOX` / …), `day` (Postgres `date`, Tokyo calendar), `refId`; unique `(userId, kind, day)` |
 | `AuthEvent` | `userId`, `kind`, `ip` (IPv6 as /64), `userAgent`, `createdAt`; deleted after 90 days |
 | `EmailToken` | `userId`, `purpose` (`VERIFY` / `RESET` / `FIND_ID`), `tokenHash`, `expiresAt`, `usedAt` |
-| `Flag` | `kind`, `userId`, `evidence` (JSON), `status`, `reviewedBy` |
+| `Flag` | `kind`, `userId`, `evidence` (JSON), `status`, `reviewedBy`, `createdAt` |
 | `SignupClaim` | `field` (`LOGIN_ID` / `NICKNAME` / `EMAIL`), `valueKey` (lowercased login ID/nickname, normalized email), `formToken`, `status` (`ACTIVE` / `FAILED`), `claimedAt` (DB clock); unique `(field, valueKey, formToken)`; deleted after a successful sign-up; `FAILED` and leftover rows are swept after 1 minute |
 | `NicknameChange` | `userId`, `oldNickname`, `newNickname`, `byAdminId`, `reason`, `changedAt` (audit log of admin renames) |
 | `ModerationAction` | `userId`, `kind` (`MUTE` / `KICK` / `BAN`), `until`, `reason`, `byAdminId` |
@@ -499,6 +510,213 @@ ADMIN_PASSWORD=
 | *(later)* `Match`, `ShopItem` / `Inventory`, `FantasyTeam` / `FantasyPick`, `Item` / `Equipped`, `GameRound`, `RoomSettings` | see "Future features" |
 
 `winnerOptionId` isn't a composite FK because Prisma maps that awkwardly. `settle.ts` checks that the winner belongs to the window, inside the locked transaction.
+
+**Deletes:** users are only ever hard-deleted by the 24-hour unverified-account cleanup. An unverified user can't open a socket and gets no points, so they own no ledger, bet, report or moderation rows. `Session`, `EmailToken`, `AuthEvent` and `Flag` use `onDelete: Cascade` on `userId`; every other relation to `User` uses `onDelete: Restrict`, so deleting a user who has played fails loudly instead of losing history. `SignupClaim` has no `userId` and is removed by its own sweep.
+
+**`LedgerEntry.account`** is a string (`USER:<id>`, `HOUSE`, `ESCROW:<ref>`, `SHOP`), not a foreign key; the ERD draws its link to `User` as a dotted line.
+
+### ERD: economy, betting and rooms
+
+```mermaid
+erDiagram
+    User ||--o{ Room : creates
+    Room ||--o{ BettingWindow : hosts
+    BettingWindow ||--|{ WindowOption : offers
+    BettingWindow }o--o| WindowOption : "won by"
+    BettingWindow ||--o{ Bet : collects
+    WindowOption ||--o{ Bet : "picked by"
+    User ||--o{ Bet : places
+    User |o--o{ BettingWindow : resolves
+    User ||--o| PendingDoubleDown : holds
+    Bet ||--o| PendingDoubleDown : "tracked by"
+    User ||--o{ DailyUse : claims
+    LedgerTx ||--|{ LedgerEntry : contains
+    User ||..o{ LedgerEntry : "account USER:id"
+
+    User {
+        uuid id PK
+        string loginId UK "case-insensitive, private"
+        string nickname UK "case-insensitive, permanent"
+        int balance "cached, can be negative"
+        string role "ADMIN USER"
+    }
+    Room {
+        uuid id PK
+        string name
+        uuid createdById FK "the admin"
+        string source "YOUTUBE TWITCH"
+        string sourceRef "video id, channel or VOD id"
+        bool isLive
+        bool isPlaying
+        float positionSec
+        datetime positionUpdatedAt
+        int playbackVersion
+        datetime createdAt
+    }
+    BettingWindow {
+        uuid id PK
+        uuid roomId FK
+        string question
+        string status "OPEN LOCKED SETTLED VOID"
+        string resolution "ADMIN RNG EXTERNAL"
+        datetime closesAt
+        int minStake
+        int maxStake
+        bool allowDoubleDown
+        uuid winnerOptionId FK "checked in settle.ts"
+        string resolver "ADMIN RNG EXTERNAL"
+        string resolutionRef
+        uuid resolvedByUserId FK
+        datetime resolvedAt
+        datetime createdAt
+        datetime lockedAt "stale after 24h"
+        int version
+    }
+    WindowOption {
+        uuid id PK
+        uuid windowId FK
+        string label "unique per window"
+        string code "2-4 chars, unique per window"
+        string color "allowlisted"
+    }
+    Bet {
+        uuid id PK
+        uuid windowId FK
+        uuid optionId FK "composite FK with windowId"
+        uuid userId FK "unique with windowId"
+        int stake
+        bool doubleDown
+        int basePayout
+        int bonusPayout
+        int lossPenalty
+        string requestId "unique with userId"
+        datetime createdAt "feed order"
+    }
+    PendingDoubleDown {
+        uuid userId PK, FK
+        uuid betId FK
+    }
+    DailyUse {
+        uuid userId PK, FK
+        string kind PK "DOUBLE_DOWN LUCKY_BOX"
+        date day PK "Tokyo calendar"
+        string refId
+    }
+    LedgerTx {
+        bigint id PK "auto-increment, orders balance:updated"
+        string reason "unique with refId"
+        string refId
+        datetime createdAt
+    }
+    LedgerEntry {
+        uuid id PK
+        bigint txId FK
+        string account "USER:id HOUSE ESCROW:ref SHOP"
+        int amount "entries of a tx sum to 0"
+    }
+```
+
+### ERD: accounts and safety
+
+```mermaid
+erDiagram
+    User ||--o{ Session : "signs in with"
+    User ||--o{ EmailToken : receives
+    User ||--o{ AuthEvent : generates
+    User ||--o{ Flag : "flagged by"
+    User ||--o{ ModerationAction : receives
+    User ||--o{ ModerationAction : "issued by admin"
+    User ||--o{ Report : files
+    User ||--o{ Report : "reported in"
+    Room ||--o{ Report : "context of"
+    User ||--o{ NicknameChange : "renamed in"
+    User ||--o{ NicknameChange : "renamed by admin"
+
+    User {
+        uuid id PK
+        string loginId UK "4-20 letters or digits"
+        string nickname UK "2-16 letters or digits"
+        string emailNormalized UK "exact match"
+        datetime emailVerifiedAt
+        string passwordHash "argon2id"
+        string role "ADMIN USER"
+        datetime createdAt "24h unverified cleanup"
+        datetime bannedAt
+    }
+    Room {
+        uuid id PK
+    }
+    Session {
+        string id PK "stored hashed"
+        uuid userId FK "cascade"
+        datetime expiresAt "30 days, sliding"
+        datetime lastSeenAt
+        string ip
+        string userAgent
+    }
+    EmailToken {
+        uuid id PK
+        uuid userId FK "cascade"
+        string purpose "VERIFY RESET FIND_ID"
+        string tokenHash
+        datetime expiresAt
+        datetime usedAt
+    }
+    AuthEvent {
+        uuid id PK
+        uuid userId FK "cascade"
+        string kind "SIGNUP LOGIN LOGIN_FAILED RESET"
+        string ip "IPv6 as /64"
+        string userAgent
+        datetime createdAt "deleted after 90 days"
+    }
+    Flag {
+        uuid id PK
+        uuid userId FK "cascade"
+        string kind "SHARED_IP NEW_ACCOUNT_TRANSFER"
+        json evidence
+        string status "OPEN DISMISSED ACTIONED"
+        uuid reviewedBy FK
+        datetime createdAt
+    }
+    ModerationAction {
+        uuid id PK
+        uuid userId FK
+        string kind "MUTE KICK BAN"
+        datetime until
+        string reason
+        uuid byAdminId FK
+    }
+    Report {
+        uuid id PK
+        uuid reporterId FK
+        uuid targetUserId FK
+        string reason
+        string status
+        uuid roomId FK
+        string messageId
+        text messageText "evidence snapshot"
+        datetime messageCreatedAt
+        datetime reportedAt
+    }
+    NicknameChange {
+        uuid id PK
+        uuid userId FK
+        string oldNickname
+        string newNickname
+        uuid byAdminId FK
+        string reason
+        datetime changedAt
+    }
+    SignupClaim {
+        uuid id PK
+        string field "LOGIN_ID NICKNAME EMAIL"
+        string valueKey "unique with field, formToken"
+        string formToken
+        string status "ACTIVE FAILED"
+        datetime claimedAt "DB clock"
+    }
+```
 
 ## Sign-up and availability checks
 
@@ -537,6 +755,7 @@ Two different people submitting sign-ups that share any of the three values (log
 | Rule | Decision |
 |---|---|
 | Logging in | Allowed, but the only screen is "Verify your email": resend the link (rate-limited), change the email, or log out |
+| Changing the email | `POST /auth/change-email`, unverified users only. The new address must be free (same rule as the availability check); the server updates `emailNormalized`, marks every unused `VERIFY` token as used so old links stop working, and sends a new link. It doesn't extend the 24-hour deadline. |
 | Watching, chatting, betting | Not allowed. `/auth/ws-ticket` refuses unverified users (`EMAIL_NOT_VERIFIED`), so they can't open a socket. |
 | Starting points | None until verification (the 5,000 grant happens on verification) |
 | Cleanup | Accounts still unverified 24 hours after sign-up are deleted by `abuse/retention.ts`, which frees their login ID, nickname and email |
@@ -576,7 +795,8 @@ Two different people submitting sign-ups that share any of the three values (log
 | Open windows | At most one `OPEN` per room, enforced in the database |
 | Transitions | Only these are allowed:<br>• `OPEN → LOCKED` (timer reaches `closesAt`, or the admin locks early)<br>• `OPEN → VOID` (the admin cancels; everyone is refunded)<br>• `LOCKED → SETTLED` (the admin picks the winner)<br>• `LOCKED → VOID` (the admin voids; everyone is refunded)<br>• Extend: only while `OPEN`<br>`SETTLED` and `VOID` are final. |
 | Result display | Always **net** profit or loss: a win shows `+(return − stake)`, a normal loss `−stake`, a doubled loss `−2 × stake`. Example: 1,000 doubled at 1.72x wins `+2,440` (3,440 returned) or loses `−2,000`. |
-| Stale windows | A window `LOCKED` for more than 24 hours is marked stale in the admin view. The admin settles or voids it; nothing is voided automatically. |
+| Stale windows | A window whose `lockedAt` is more than 24 hours ago and is still `LOCKED` is marked stale in the admin view. The admin settles or voids it; nothing is voided automatically. |
+| Displayed times | "Locked at …" and "Settled at …" show wall-clock time (Tokyo) from `lockedAt` / `resolvedAt`, not the stream position |
 | Bet visibility | Always public, live. Each bet appears in the bet feed the moment it's accepted (`bet:placed`: userId, option, stake, doubled). A double-down also posts a chat **event** `{ event: "double_down", userId, windowId, optionId }`, rendered as "Kaz used double down on OBS!" with `<Nickname>` and the option code, so an admin rename updates old messages too. Per-team point totals, bettor counts and odds refresh at most once a second (`window:odds`). A viewer who joins mid-window gets the bets and totals in the snapshot. Later bettors can follow the crowd; that's intended. |
 | Time | The server/DB clock decides; clients get `serverTime` + `closesAt` once and count down locally |
 | Settlement authority | `ADMIN`: admin handler only. `RNG`: game engine only. `EXTERNAL`: match-sync job only. |
@@ -598,6 +818,8 @@ Two different people submitting sign-ups that share any of the three values (log
 | Sign-up | 5 per hour per IP |
 | Availability checks | 30 per 10 minutes per IP (all three fields together) |
 | Login | 10 failures per 15 minutes per loginId and per IP |
+| Resend verification | 1 per minute per user, 10 per day |
+| Change email | 5 per day per user |
 | Error shape | `{ type: "error", requestId, code, message }`, with codes from `shared/src/errors.ts` |
 
 These are starting values in `shared/src/limits.ts`; tune them once real usage shows what's too tight or too loose.
@@ -614,7 +836,7 @@ Points are free, can't be bought and can't be cashed out, so economy exploits on
 | Floods / overload | **Prevented:** the limits above |
 | XSS | **Prevented:** user text is always rendered as text; cosmetics come from allowlists |
 | Account takeover | **Prevented:** argon2id, login rate limits, single-use expiring email tokens, generic replies from login/reset/find-ID |
-| Email enumeration | **Accepted:** the sign-up availability check reveals whether an email has an account. That's fine for a friends' app; the check is rate-limited so nobody can test emails in bulk. Find-ID and reset still reply generically. |
+| Email enumeration | **Accepted:** the sign-up availability check reveals whether an email has an account. That's fine for a small community app; the check is rate-limited so nobody can test emails in bulk. Find-ID and reset still reply generically. |
 | Harassment | **Prevented:** admin mute/kick/ban and reports. A ban deletes sessions, closes open sockets, and blocks login and tickets. |
 | Admin actions | **Prevented:** role checked on the server for every admin action. The first admin is created by `prisma/seed.ts`. |
 | Shared IPs, VPNs | **Flagged**, not blocked |
