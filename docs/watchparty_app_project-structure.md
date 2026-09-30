@@ -18,6 +18,13 @@ Current:
 
 Superseded (pp. 1, 4, 5; kept for reference only, don't build from them): "Viewer — watch room with live bet", "Bet window collapsed — chat takes the rail" and "Bet window expanded — chat shrinks". They predate live bets, admin-only playback and the lucky box, and show navigation and panels that aren't in the file tree. The collapse/expand behaviour they show still applies.
 
+**Where the mockups and this document differ, this document wins.** The mockups show layout and style; text, numbers and rules come from here. Known differences, to be built the way this document says:
+- Payout text: "The house paid {winners} winners {points} pts." (see "Result copy" under Betting rules), not "… pts paid out to 24 winners".
+- Void dialog: "… {n} double-down tickets are returned."
+- "Locked at" / "Settled at" show wall-clock time from `lockedAt` / `resolvedAt`, not the stream position.
+- Double-down toggle, when on: "Win 2× the return · lose 2× the stake", not "stake counts twice".
+- Admin stats: "Points in escrow" (open and locked stakes), not "Points in open pools". The double-downs count can never exceed the number of users.
+
 **ERD:** the Mermaid diagrams under [Database](#database-postgresql) are the reference, next to the table they describe. The older design-tool export, [`docs/Watch-party ERD_ economy and betting.pdf`](./Watch-party%20ERD_%20economy%20and%20betting.pdf), is kept for layout only and is missing columns; don't build from it.
 
 ## Revisions
@@ -76,6 +83,13 @@ Superseded (pp. 1, 4, 5; kept for reference only, don't build from them): "Viewe
   - **Deletes:** cascade rules for the 24-hour unverified-account cleanup.
   - **ERD:** Mermaid diagrams in this document replace the PDF export as the reference.
   - **Mockup links:** point at the pages of `Watch-party betting UI.pdf`.
+- 2026-09-30, house-paid winnings:
+  - **Who pays winners:** `HOUSE` pays every winning bet; winners are no longer paid out of the pool. At settlement all stakes move `ESCROW → HOUSE`, then `HOUSE` pays each winner `stake × odds` (× 2 if doubled).
+  - **Odds:** unchanged; still the pool split at lock (`total pool ÷ winning option's pool`). The pool now only sets the odds.
+  - **Double down:** one payout of `stake × odds × 2` from `HOUSE` instead of a pool base plus a house bonus. A doubled loss still costs 2× the stake.
+  - **Schema:** `Bet.basePayout` + `bonusPayout` → `Bet.payout`; ledger reasons `BET_BONUS` and `ROUNDING` removed, `BET_COLLECT` added.
+  - **Voids:** no winners, admin cancel and admin void all refund every stake automatically and return spent double-down tickets; the admin doesn't need a reason.
+  - **Copy:** settled results read "The house paid {winners} winners {points} pts."
 
 ## Principles
 
@@ -138,15 +152,19 @@ The tree starts from the current repository. `(later)` marks folders that are cr
 ```
 socket-learning/
 ├── package.json                      # NEW: npm workspaces ["client", "server", "shared"]
-│                                     #   scripts: dev, test, lint, db:up, db:migrate, db:seed
+│                                     #   scripts: dev, build, test, lint, format, typecheck,
+│                                     #   db:up, db:down, db:migrate, db:reset, db:seed
 ├── package-lock.json                 # moves to the root once workspaces are set up
 ├── tsconfig.base.json                # NEW: strict mode, shared compiler options
 ├── docker-compose.yml                # NEW: postgres:16 (dev + test DBs), mailpit
+├── docker/postgres/init.sql          # NEW: creates the watchparty_test database
 ├── .gitignore
 ├── README.md                         # how to run: see "Dev setup" below
 │
 ├── docs/
 │   ├── watchparty_app_project-structure.md   # ★ this document (includes the ERD)
+│   ├── watchparty_phases.md          # scope and exit criteria per phase and step
+│   ├── watchparty_execution_plan.md  # ordered tasks and checks per step
 │   ├── Watch-party ERD_ economy and betting.pdf  # older ERD export, layout only
 │   └── watchpartySS/                 # Watch-party betting UI .pdf / .html mockups
 │
@@ -155,7 +173,8 @@ socket-learning/
 │   └── src/
 │       ├── messages/                 # namespaced: <feature>:<verb>
 │       │   ├── client.ts             # every client message: { action, requestId, payload }
-│       │   │                         #   room:join, chat:send, playback:load/play/pause/seek,
+│       │   │                         #   room:list, room:join, room:create/update (admin),
+│       │   │                         #   chat:send, playback:load/play/pause/seek,
 │       │   │                         #   window:open/lock/extend/settle/void (void works
 │       │   │                         #   from OPEN or LOCKED), bet:place,
 │       │   │                         #   bonus:open_lucky_box, wallet:transfer
@@ -306,7 +325,8 @@ socket-learning/
         │                             #   retry on 40P01 / 40001
         ├── features.ts               # ★ registered features
         ├── http/
-        │   ├── router.ts
+        │   ├── router.ts             # GET /health; /auth/* below; GET /auth/me (current
+        │   │                         #   user, verified flag, role)
         │   ├── auth/
         │   │   ├── availability.ts   # GET /auth/availability?field=loginId|nickname|email
         │   │   │                     #   &value=… → { available } or { invalid, reason };
@@ -399,14 +419,16 @@ socket-learning/
         │   │   │                     #   duplicate requestId →
         │   │   │                     #   original result with replayed: true
         │   │   ├── odds.ts           # pool totals → odds; broadcast ≤ 1/s per window
-        │   │   ├── payout.ts         # base = floor(stake × pool / winningPool);
-        │   │   │                     #   bonus = base if doubled (HOUSE→winner);
-        │   │   │                     #   doubled loser penalty = stake (forcedDebit);
-        │   │   │                     #   rounding remainder ESCROW→HOUSE
+        │   │   ├── payout.ts         # all stakes ESCROW→HOUSE (BET_COLLECT);
+        │   │   │                     #   winner payout = floor(stake × m × pool / winningPool),
+        │   │   │                     #   m = 2 if doubled else 1, HOUSE→winner (BET_PAYOUT);
+        │   │   │                     #   doubled loser penalty = stake (forcedDebit)
         │   │   ├── settle.ts         # resolver must match resolution; winner must belong
         │   │   │                     #   to the window; no winning bets → void path;
         │   │   │                     #   stores audit fields; users sorted by id
-        │   │   └── void.ts           # ESCROW→owners, restore DailyUse, delete
+        │   │   └── void.ts           # no winners, admin cancel (OPEN) or void (LOCKED);
+        │   │                         #   no reason needed; ESCROW→owners, return
+        │   │                         #   double-down tickets (delete DailyUse), delete
         │   │                         #   PendingDoubleDown, no penalty
         │   ├── bonus/
         │   │   └── lucky-box.ts      # bonus:open_lucky_box: DailyUse LUCKY_BOX (Tokyo day)
@@ -493,11 +515,11 @@ ADMIN_PASSWORD=
 | `User` | `loginId` (4–20 chars, English letters and digits), `nickname` (2–16 chars, English letters and digits, permanent), `emailNormalized` (unique, recovery), `emailVerifiedAt`, argon2id hash, `role` (`ADMIN` / `USER`), `createdAt`, `balance` (`Int`, cached; can be negative), `bannedAt`. `loginId` and `nickname` are unique case-insensitively (unique indexes on `lower(...)`, added in a raw SQL migration). |
 | `Session` | `id` (stored hashed), `userId`, `expiresAt` (30 days, sliding), `lastSeenAt`, `ip`, `userAgent`; deleted on logout, password reset and ban |
 | `Room` | `name`, `createdById` (the admin), `source`, `sourceRef`, `isLive`, `isPlaying`, `positionSec`, `positionUpdatedAt`, `playbackVersion`, `createdAt` |
-| `LedgerTx` | `id` (auto-increment; also the ordering key for `balance:updated`), `reason` (`SIGNUP_GRANT` / `LUCKY_BOX` / `BET_STAKE` / `BET_PAYOUT` / `BET_BONUS` / `BET_PENALTY` / `BET_REFUND` / `ROUNDING` / `TRANSFER` / …), `refId`, `createdAt`; unique `(reason, refId)` |
+| `LedgerTx` | `id` (auto-increment; also the ordering key for `balance:updated`), `reason` (`SIGNUP_GRANT` / `LUCKY_BOX` / `BET_STAKE` / `BET_COLLECT` / `BET_PAYOUT` / `BET_PENALTY` / `BET_REFUND` / `TRANSFER` / …), `refId`, `createdAt`; unique `(reason, refId)` |
 | `LedgerEntry` | `txId`, `account` (`USER:<id>` / `HOUSE` / `ESCROW:<ref>` / `SHOP`), `amount`; the entries of a tx sum to 0 |
 | `BettingWindow` | `roomId`, `question`, `status`, `resolution`, `closesAt`, `minStake`, `maxStake`, `allowDoubleDown`, `winnerOptionId`, `resolver`, `resolutionRef`, `resolvedByUserId`, `resolvedAt`, `createdAt`, `lockedAt` (set on `OPEN → LOCKED`; stale windows are measured from it), `version`; one `OPEN` per room (raw SQL partial index) |
 | `WindowOption` | `windowId`, `label`, `code` (2–4 uppercase letters or digits, e.g. `KES`; unique per window), `color`, (later) `externalRef` for mapping to match results; unique `(windowId, id)`, unique `(windowId, label)` |
-| `Bet` | `windowId`, `optionId`, `userId`, `stake`, `doubleDown`, `basePayout`, `bonusPayout`, `lossPenalty`, `requestId`, `createdAt` (orders the bet feed, newest first); unique `(windowId, userId)`, unique `(userId, requestId)`; composite FK `(windowId, optionId) → WindowOption(windowId, id)` |
+| `Bet` | `windowId`, `optionId`, `userId`, `stake`, `doubleDown`, `payout` (total returned by `HOUSE` on a win, stake included; 0 on a loss), `lossPenalty`, `requestId`, `createdAt` (orders the bet feed, newest first); unique `(windowId, userId)`, unique `(userId, requestId)`; composite FK `(windowId, optionId) → WindowOption(windowId, id)` |
 | `PendingDoubleDown` | `userId` (unique), `betId`; deleted on settle or void |
 | `DailyUse` | `userId`, `kind` (`DOUBLE_DOWN` / `LUCKY_BOX` / …), `day` (Postgres `date`, Tokyo calendar), `refId`; unique `(userId, kind, day)` |
 | `AuthEvent` | `userId`, `kind`, `ip` (IPv6 as /64), `userAgent`, `createdAt`; deleted after 90 days |
@@ -586,8 +608,7 @@ erDiagram
         uuid userId FK "unique with windowId"
         int stake
         bool doubleDown
-        int basePayout
-        int bonusPayout
+        int payout "total returned by HOUSE on a win"
         int lossPenalty
         string requestId "unique with userId"
         datetime createdAt "feed order"
@@ -769,7 +790,7 @@ Two different people submitting sign-ups that share any of the three values (log
 | Daily lucky box | Once per user per Tokyo calendar day (`DailyUse` kind `LUCKY_BOX`). The server draws a uniform random whole number from **10 to 10,000** (`crypto.randomInt(10, 10001)`) and pays it `HOUSE → USER`. The client animation only reveals the server's result. The average is about 5,000 a day. |
 | Lucky box when negative | Allowed; it's the main way to climb back above 0 |
 | Where it lives | A header chip ("Daily box ready" or a countdown to the next box) opens a pop-up over the current page. It moves into the Wallet page once that exists (phase 4). |
-| Non-user accounts | `HOUSE`, `ESCROW:<ref>` and `SHOP` have no stored balance; they're computed by summing `LedgerEntry`. `HOUSE` is expected to go negative, because it funds sign-up grants, lucky boxes and double-down bonuses. |
+| Non-user accounts | `HOUSE`, `ESCROW:<ref>` and `SHOP` have no stored balance; they're computed by summing `LedgerEntry`. `HOUSE` is expected to go negative, because it funds sign-up grants, lucky boxes and every winning bet (it collects all stakes at settlement, so a window only costs `HOUSE` extra when doubled winners outweigh doubled losers' penalties). |
 | Reconciliation | `server/scripts/reconcile.ts` checks that every `User.balance` equals its ledger sum and that every settled or voided window's escrow is 0. It runs in the test suite and can be run by hand. |
 | Balance type | `Int` (up to about 2.1 billion) |
 
@@ -782,16 +803,18 @@ Two different people submitting sign-ups that share any of the three values (log
 | Opening a window | Question, 2 or more options (label, short code, colour), duration (30s / 60s / 2m / 5m presets, or custom from 10 seconds to 10 minutes), min and max stake, double down allowed or not. Every window is announced in chat automatically. No market types or templates. |
 | Option codes | Every option has a 2–4 character uppercase code (`KES`, `OBS`, `YES`, `NO`), used in the collapsed bar, the bet feed and chat events |
 | Bets per window | One per user, no edits after placing, one option only |
-| Base return | `stake × odds`, where odds = total pool ÷ pool on the winning option (parimutuel). Shown as an estimate while open; final at lock. |
-| Double down (2× return boost) | Win: `stake × odds × 2`. Lose: `stake × 2`. This is intentional: it doubles the whole return, not just the profit. The stake is deducted when placing; the second stake is a penalty at settlement. Only the stake counts in the pool. Once per Tokyo day (`DailyUse`), and only one unresolved double-down per user (`PendingDoubleDown`). Restored if the window is voided. |
+| Odds | Odds = total pool ÷ pool on that option. Shown live as an estimate while open; final at lock. The pool only sets the odds: winners are paid by `HOUSE`, not out of the pool. |
+| Win payout | `HOUSE` pays `stake × odds` (the total returned, stake included), using the final odds at lock. It doesn't depend on how many points are left in the pool. |
+| Double down (2× return boost) | Win: `HOUSE` pays `stake × odds × 2`. Lose: `stake × 2`. This is intentional: it doubles the whole return, not just the profit. The stake is deducted when placing; the second stake is a penalty at settlement. Only the stake counts in the pool. Once per Tokyo day (`DailyUse`), and only one unresolved double-down per user (`PendingDoubleDown`). Restored if the window is voided. |
 | Placing a double-down bet | Needs `balance ≥ stake`, the same as a normal bet |
-| Win example | 5,000 on a 3.98x side, doubled: base 19,900 from the pool, plus a 19,900 bonus from `HOUSE`, gives 39,800 returned |
+| Win example | 5,000 on a 2.98x side, doubled: `HOUSE` pays 5,000 × 2.98 × 2 = 29,800 (net +24,800). Not doubled: 14,900 (net +9,900). |
 | Loss example | Balance 6,000, 5,000 doubled and lost: 6,000 − 10,000 = −4,000 |
 | Negative balance | Shown as a negative number. A user below 0 can't bet, transfer or buy until the balance is back above 0. The lowest possible balance is −`maxStake`. |
 | Max stake | Applies to the stake the user pays |
-| Money flow | Stake `USER → ESCROW`. Settle: base `ESCROW → winners`, bonus `HOUSE → doubled winners`, penalty `doubled losers → HOUSE`, rounding `ESCROW → HOUSE`. Void: `ESCROW → owners`. |
-| Exact odds | Payouts use the exact pool ratio, not the rounded odds on screen |
-| No winning bets | Settlement takes the void path, and everyone is refunded |
+| Money flow | Place: stake `USER → ESCROW:window` (`BET_STAKE`). Settle: all stakes `ESCROW → HOUSE` (`BET_COLLECT`), each winner `HOUSE → USER` (`BET_PAYOUT`), each doubled loser's penalty `USER → HOUSE` (`BET_PENALTY`, forced debit). Void: `ESCROW → owners` (`BET_REFUND`). Escrow is 0 after either. |
+| Exact odds and rounding | Payouts use the exact ratio, not the rounded odds on screen: `payout = floor(stake × m × pool ÷ winningPool)` in integer arithmetic, with `m = 2` if doubled, else 1. Rounding down only ever favours `HOUSE`. |
+| Void and refund | A window is voided in three cases: nobody bet on the winning option (settlement switches to the void path automatically), the admin cancels while `OPEN`, or the admin voids while `LOCKED`. The admin doesn't have to give a reason. Every void does the same thing, in one transaction: each stake goes back `ESCROW → owner` (`BET_REFUND`), no double-down penalty is charged, and every double-down ticket spent on the window is returned (its `DailyUse` row and `PendingDoubleDown` row are deleted). Returned tickets can be used again the same Tokyo day; if the void happens after midnight, the user already has that day's new ticket, so there's nothing extra to return. |
+| Result copy | Settled card and admin list: "The house paid {winners} winners {points} pts." Settle dialog: "The house will pay {winners} winners {points} pts. This can't be changed afterwards." Void dialog: "All {bets} stakes ({points} pts) go back to their owners and {n} double-down tickets are returned." |
 | Open windows | At most one `OPEN` per room, enforced in the database |
 | Transitions | Only these are allowed:<br>• `OPEN → LOCKED` (timer reaches `closesAt`, or the admin locks early)<br>• `OPEN → VOID` (the admin cancels; everyone is refunded)<br>• `LOCKED → SETTLED` (the admin picks the winner)<br>• `LOCKED → VOID` (the admin voids; everyone is refunded)<br>• Extend: only while `OPEN`<br>`SETTLED` and `VOID` are final. |
 | Result display | Always **net** profit or loss: a win shows `+(return − stake)`, a normal loss `−stake`, a doubled loss `−2 × stake`. Example: 1,000 doubled at 1.72x wins `+2,440` (3,440 returned) or loses `−2,000`. |
@@ -881,12 +904,12 @@ Points are free, can't be bought and can't be cashed out, so economy exploits on
 | Horse racing | A betting round with `resolution = RNG`; the server fixes the finishing order and the client animates toward it. Extract `rounds/` here. |
 | Provably fair | Publish `SHA-256(seed)` before bets; derive results with `HMAC-SHA256(seed, "<game>:<roundId>:<n>")`; reveal the seed after settlement. The lucky box doesn't claim this; it uses `crypto.randomInt`. |
 | Right rail | `BetRail` becomes `ActivityRail` for whichever activity is live |
-| Economy health | Watch `HOUSE` outflows: sign-up grants, lucky boxes (about 5,000 per user per day) and double-down bonuses. Shop purchases are the sink. Adjust the lucky-box range if points inflate too fast. |
+| Economy health | Watch `HOUSE` outflows: sign-up grants, lucky boxes (about 5,000 per user per day) and betting. Because odds come from the final pool, a window with no double-downs costs `HOUSE` nothing (payouts equal the stakes collected, minus rounding); doubled winners are the net outflow and doubled losers' penalties the inflow. Shop purchases are the sink. Adjust the lucky-box range if points inflate too fast. |
 | Multi-server (much later) | Room maps and tickets move to Redis; timers move to the DB sweeper with `SKIP LOCKED` |
 
 ## Build phases
 
-Nothing past phase 2 is built until a watch party and a betting window work end to end.
+Nothing past phase 2 is built until a watch party and a betting window work end to end. Scope and exit criteria per step are in [`watchparty_phases.md`](./watchparty_phases.md); the ordered tasks are in [`watchparty_execution_plan.md`](./watchparty_execution_plan.md).
 
 **Phase 1: core MVP**
 0. Dev setup: root workspaces, `shared/`, TypeScript, docker-compose, `.env.example`, Vite proxy, Vitest, ESLint. Remove the old Express/Socket.IO dependencies from `server/`.
