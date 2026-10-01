@@ -9,7 +9,7 @@ Each step lists:
 
 Paths are relative to the repository root. `[ ]` boxes are meant to be ticked in pull requests.
 
-## Starting point (2026-09-30)
+## Starting point (2026-10-01)
 
 - `server/` holds only the old `package.json` (Express, Socket.IO, `ws`, nodemon), `package-lock.json`, `.env`, `.env.example` and `node_modules/`. The old JavaScript server was deleted in commit `33cffe6`; for the TypeScript port in step 1, read it from the commit before: `git show 42ab038:server/index.js` (also `roomService.js`, `broadcast.js`, `test-client.js`).
 - `client/` is empty.
@@ -21,16 +21,20 @@ These aren't spelled out in the structure document; they're chosen here so the s
 
 | Topic | Choice | Why |
 |---|---|---|
-| Module format | ESM everywhere; `"moduleResolution": "Bundler"` | One setting for Vite, `tsx` and Vitest; no `.js` suffixes in imports |
-| Shared package | Consumed as TypeScript source (`exports` → `src/index.ts`) | No build step for `shared` in dev or tests |
+| Module format | ESM everywhere; `"moduleResolution": "Bundler"` | One setting for Next.js, `tsx` and Vitest; no `.js` suffixes in imports |
+| Shared package | Consumed as TypeScript source (`exports` → `src/index.ts`); `transpilePackages` in Next.js | No build step for `shared` in dev or tests |
 | Server runtime | `tsx watch` in dev; `tsup` bundles `server` + `shared` for production | Fast reloads; one output file to deploy |
+| Frontend | Next.js 16, App Router, `src/`, Turbopack (the default); frontend only | See "Frontend (Next.js)" in the structure document |
+| Next.js versions | `next@16`; `proxy.ts` (Next.js 16's name for middleware); async `cookies()` / `headers()` / `params` | Matches the current major; earlier majors call the file `middleware.ts` |
+| Linting | Root `eslint.config.js` for `server/` and `shared/`; `client/` keeps the Next.js-generated `eslint.config.mjs` (+ `eslint-config-prettier`); the root ignores `client/` | The Next.js config registers its own React and TypeScript plugins; merging both into one file causes plugin conflicts |
 | Styling | CSS Modules plus global CSS variables for the theme tokens | No extra framework; tokens map 1:1 to the theme sample |
-| Fonts | `@fontsource` packages (Barlow Condensed 600, IBM Plex Sans 400/600, JetBrains Mono 600) | Self-hosted; no third-party font requests |
+| Fonts | `next/font/google` (Barlow Condensed 600, IBM Plex Sans 400/600, JetBrains Mono 600) | Self-hosted at build time; no third-party font requests at runtime |
+| Client state | Zustand vanilla stores created inside `<ClientProviders>` per request | Module-level stores would be shared between users on the Next.js server |
 | Email | `nodemailer` over SMTP (Mailpit in dev) | Matches `.env` settings in the structure document |
 | Passwords | `argon2` (argon2id) | As specified |
 | Test database | `vitest` global setup runs `prisma migrate reset --force --skip-seed` on `TEST_DATABASE_URL`; DB test files run one at a time | Real Postgres behaviour, no cross-test interference |
 | Health check | `GET /health` → `{ ok: true }` | Lets the proxy and tests confirm the server is up |
-| Room list | `room:list` over the socket | Keeps the HTTP surface to `/auth/*` and `/health` |
+| Room list | `GET /api/rooms`, fetched by a server component | The list is server-rendered; live state stays on the socket |
 
 ---
 
@@ -38,9 +42,9 @@ These aren't spelled out in the structure document; they're chosen here so the s
 
 ### Step 0: Dev setup
 
-**Before you start:** Docker Desktop is running. Nothing on ports 3000, 5173, 5432, 1025, 8025.
+**Before you start:** Docker Desktop is running. Nothing on ports 3000, 4000, 5432, 1025, 8025.
 
-A copy-and-paste walkthrough of this step, with every file's contents, is in [`step-0-guide.md`](./step-0-guide.md).
+A copy-and-paste walkthrough of this step, with every file's contents, is in [`guide/step-0-guide.md`](./guide/step-0-guide.md).
 
 **Tasks**
 
@@ -48,10 +52,10 @@ A copy-and-paste walkthrough of this step, with every file's contents, is in [`s
 - [ ] **0.2 Root workspace.**
   - `package.json`: `"private": true`, `"type": "module"`, `"workspaces": ["shared", "server", "client"]`.
   - Scripts:
-    - `dev`: `concurrently -n server,client -c blue,magenta "npm:dev -w server" "npm:dev -w client"`
+    - `dev`: `concurrently -n server,client -c blue,magenta "npm run dev -w server" "npm run dev -w client"`
     - `build`: `npm run build -w server && npm run build -w client`
     - `test`: `npm run test --workspaces --if-present`
-    - `lint`: `eslint .`
+    - `lint`: `eslint . && npm run lint -w client`
     - `format`: `prettier --write .`
     - `typecheck`: `npm run typecheck --workspaces --if-present`
     - `db:up`: `docker compose up -d`
@@ -59,14 +63,14 @@ A copy-and-paste walkthrough of this step, with every file's contents, is in [`s
     - `db:migrate`: `npm run db:migrate -w server`
     - `db:reset`: `npm run db:reset -w server`
     - `db:seed`: `npm run db:seed -w server`
-  - Dev dependencies: `typescript`, `concurrently`, `eslint`, `@eslint/js`, `typescript-eslint`, `eslint-plugin-react-hooks`, `eslint-plugin-react-refresh`, `globals`, `prettier`, `eslint-config-prettier`.
+  - Dev dependencies: `typescript@5`, `concurrently`, `eslint@9`, `@eslint/js`, `typescript-eslint`, `globals`, `prettier`, `eslint-config-prettier`.
   - Check: `npm install` at the root succeeds and creates one root `package-lock.json`.
 - [ ] **0.3 TypeScript base.** `tsconfig.base.json`: `strict`, `target: ES2022`, `module: ESNext`, `moduleResolution: Bundler`, `resolveJsonModule`, `isolatedModules`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `skipLibCheck`, `forceConsistentCasingInFileNames`.
 - [ ] **0.4 Repo hygiene.**
   - `.gitattributes`: `* text=auto eol=lf`.
-  - `.prettierrc`: `{ "singleQuote": true, "semi": true, "trailingComma": "all", "printWidth": 100, "endOfLine": "lf" }`; `.prettierignore` with `dist`, `coverage`, `*.png`, `*.pdf`, `docs/**/*.html`, `server/prisma/migrations`.
-  - `eslint.config.js` (flat config): JS recommended + `typescript-eslint` recommended for all `.ts/.tsx`; React hooks and refresh rules for `client/`; Node globals for `server/`; `eslint-config-prettier` last. Ignore `dist`, `coverage`, `node_modules`.
-  - `.gitignore`: add `coverage/`, `*.tsbuildinfo`.
+  - `.prettierrc`: `{ "singleQuote": true, "semi": true, "trailingComma": "all", "printWidth": 100, "endOfLine": "lf" }`; `.prettierignore` with `dist`, `.next`, `coverage`, `next-env.d.ts`, `*.png`, `*.pdf`, `docs/**/*.html`, `server/prisma/migrations`.
+  - `eslint.config.js` (flat config): JS recommended + `typescript-eslint` recommended for `server/` and `shared/`; Node globals; `eslint-config-prettier` last. Ignore `client/` (it has its own config), `dist`, `coverage`, `node_modules`.
+  - `.gitignore`: add `coverage/`, `*.tsbuildinfo`, `.next/`, `next-env.d.ts`.
 - [ ] **0.5 Docker services.**
   - `docker-compose.yml`:
     - `postgres`: `postgres:16`, user/password/db `watchparty`, port `5432`, named volume, `./docker/postgres/init.sql` mounted into `/docker-entrypoint-initdb.d/`.
@@ -90,8 +94,8 @@ A copy-and-paste walkthrough of this step, with every file's contents, is in [`s
     - `db:reset`: `prisma migrate reset --force`
     - `db:seed`: `tsx --env-file=.env prisma/seed.ts`
   - `server/tsconfig.json` extending the base, `types: ["node"]`.
-  - `server/.env.example`: exactly the block from "Dev setup" in the structure document, plus `NODE_ENV=development`. Copy it to `server/.env` and fill in the admin values.
-  - `server/src/config.ts`: zod schema for every `.env` value (`PORT` number, `DATABASE_URL` URL, `ALLOWED_ORIGINS` comma list, `SESSION_TTL_DAYS` number, `TRUST_PROXY` boolean, SMTP values, `TWITCH_PARENT_DOMAINS` list, admin values optional until step 2, `NODE_ENV` enum). Exits with a readable message listing the invalid keys.
+  - `server/.env.example`: exactly the block from "Dev setup" in the structure document (`PORT=4000`, `ALLOWED_ORIGINS=http://localhost:3000`). Copy it to `server/.env` and fill in the admin values.
+  - `server/src/config.ts`: zod schema for every `.env` value (`PORT` number, `DATABASE_URL` URL, `ALLOWED_ORIGINS` comma list, `SESSION_TTL_DAYS` number, `TRUSTED_PROXIES` comma list, SMTP values, `TWITCH_PARENT_DOMAINS` list, admin values optional until step 2, `NODE_ENV` enum). Exits with a readable message listing the invalid keys.
   - `server/src/http/router.ts`: minimal router; `GET /health` → `200 { ok: true }`; everything else `404`.
   - `server/src/app.ts`: `createServer()` wrapping the router, so tests can listen on a random port without `.env`.
   - `server/src/index.ts`: load config, `createServer()`, listen on `config.PORT`, log the URL, close cleanly on `SIGINT`/`SIGTERM`.
@@ -100,19 +104,23 @@ A copy-and-paste walkthrough of this step, with every file's contents, is in [`s
   - `server/test/setup.ts`: loads `server/.env` with `process.loadEnvFile` (per-suite table truncation is added in step 2).
   - `server/test/health.test.ts`: starts the server on port 0, `GET /health` returns `{ ok: true }`, unknown paths `404`.
   - `server/test/db.test.ts`: `prisma db execute --url $TEST_DATABASE_URL` runs `SELECT 1` against the test database.
-- [ ] **0.8 Client package.**
-  - Scaffold with `npm create vite@latest client -- --template react-ts` (the folder is empty), then remove the demo content.
-  - Dependencies: `react-router-dom`, `zustand`, `@watchparty/shared`, `@fontsource/barlow-condensed`, `@fontsource/ibm-plex-sans`, `@fontsource/jetbrains-mono`.
-  - Scripts: `dev`, `build`, `preview`, `typecheck: tsc --noEmit`.
-  - `client/vite.config.ts`: port `5173`; proxy `/auth` and `/health` → `http://localhost:3000`; `/ws` → `ws://localhost:3000` with `ws: true`.
-  - `client/src/styles/tokens.css`: CSS variables from the theme sample — `--ground #0D1015`, `--surface #151A21`, `--raised #1C232C`, `--line #2A333F`, `--text #E9EDF2`, `--muted #97A3B3`, `--gold #F4B942`, `--side-a #5B9BFF`, `--side-b #FF9A55`, `--win #3DBE8B`, `--live #D93A40`; `--font-display` Barlow Condensed, `--font-body` IBM Plex Sans, `--font-num` JetBrains Mono.
+- [ ] **0.8 Client package (Next.js).**
+  - Scaffold with `npx create-next-app@16 client --ts --app --src-dir --eslint --no-tailwind --no-react-compiler --import-alias "@/*" --use-npm --skip-install --disable-git` (TypeScript, App Router, `src/`, ESLint, no Tailwind, no React Compiler), then remove the demo content and any `client/package-lock.json`, and add `!.env.example` to the generated `client/.gitignore`.
+  - Dependencies: `zustand`, `server-only`, `@watchparty/shared` (added by hand as `"*"`).
+  - Scripts: `dev: next dev --port 3000`, `build: next build`, `start: next start --port 3000`, `lint: eslint .`, `typecheck: next typegen && tsc --noEmit`.
+  - `client/next.config.ts`: `transpilePackages: ['@watchparty/shared']`; `rewrites()` for `/auth/:path*`, `/api/:path*` and `/health` → `INTERNAL_API_URL`.
+  - `client/.env.example` (`INTERNAL_API_URL`, `NEXT_PUBLIC_WS_URL`), copied to `client/.env.local`.
+  - `client/eslint.config.mjs`: the generated config plus `eslint-config-prettier` last.
+  - `client/src/styles/tokens.css`: CSS variables from the theme sample — `--ground #0D1015`, `--surface #151A21`, `--raised #1C232C`, `--line #2A333F`, `--text #E9EDF2`, `--muted #97A3B3`, `--gold #F4B942`, `--side-a #5B9BFF`, `--side-b #FF9A55`, `--win #3DBE8B`, `--live #D93A40`.
   - `client/src/styles/global.css`: reset, `body` on `--ground` with `--font-body`.
-  - `client/src/main.tsx` + `client/src/app/App.tsx`: router with one placeholder route that shows "WATCHPARTY" in the display font and the result of `fetch('/health')`.
-- [ ] **0.9 README.** Replace the old README with: what the project is, prerequisites, the "Dev setup" commands, where the three docs are.
+  - `client/src/app/layout.tsx`: `next/font/google` for the three fonts as CSS variables `--font-display`, `--font-body`, `--font-num`; imports the two stylesheets.
+  - `client/src/lib/server/api.ts`: `apiGet(path)` calling `INTERNAL_API_URL` with `cache: 'no-store'` (cookie forwarding is added in step 2).
+  - `client/src/app/page.tsx` (server component): "WATCHPARTY" in the display font, `APP_NAME` from `shared`, the server's `/health` fetched while rendering, and `<ClientHealth>` — a client component that fetches `/health` through the rewrite.
+- [ ] **0.9 README.** Replace the old README with: what the project is, prerequisites, the "Dev setup" commands, where the docs are.
 
 **Verify**
-- [ ] `npm install && npm run db:up && npm run dev` → `http://localhost:5173` shows the placeholder with `ok: true` from `/health`.
-- [ ] `npm test`, `npm run lint`, `npm run typecheck` all pass.
+- [ ] `npm install && npm run db:up && npm run dev` → `http://localhost:3000` shows the placeholder with both "Rendered on the server: ok" and "From the browser: ok".
+- [ ] `npm test`, `npm run lint`, `npm run typecheck` and `npm run build` all pass.
 - [ ] `grep -E "express|socket.io|nodemon" server/package.json` finds nothing.
 
 ### Step 1: WebSocket core and chat
@@ -141,9 +149,10 @@ A copy-and-paste walkthrough of this step, with every file's contents, is in [`s
 - [ ] **1.11 Wire the server.** `server/src/index.ts`: create `WebSocketServer({ noServer: true })`, attach upgrade handler, build the registry from `features.ts`.
 - [ ] **1.12 Client socket.**
   - `client/src/lib/request-id.ts`: `crypto.randomUUID()`.
-  - `client/src/lib/socket.ts`: connect to `/ws` (dev: `?dev=<name>`), exponential backoff (0.5 s → 10 s, jitter), typed `send(action, payload): Promise<Reply>` resolved by `requestId` with a timeout, `on(type, handler)`, rejoin the last room after reconnect.
-  - `client/src/lib/store.ts`: Zustand store for connection state and chat (`messages` keyed by `seq`, keeps 100).
-- [ ] **1.13 Client chat UI.** `client/src/features/room/RoomPage.tsx` (dev-name prompt, joins `/rooms/:roomId`), `client/src/features/chat/ChatPanel.tsx`, `ChatList.tsx`, `messages/UserMessage.tsx`, `messages/SystemMessage.tsx`, `useStickToBottom.ts`. User text is rendered as text only.
+  - `client/src/lib/socket.ts` (client-only): connect to `NEXT_PUBLIC_WS_URL` (or `wss://<host>/ws` when empty; dev: `?dev=<name>`), exponential backoff (0.5 s → 10 s, jitter), typed `send(action, payload): Promise<Reply>` resolved by `requestId` with a timeout, `on(type, handler)`, rejoin the last room after reconnect.
+  - `client/src/lib/stores/`: Zustand **vanilla** stores (`createStore`) for connection state and chat (`messages` keyed by `seq`, keeps 100), created inside `<ClientProviders>` with `useRef` and exposed through React context. Nothing is created at module level.
+  - `client/src/components/ClientProviders.tsx` (`'use client'`): creates the stores and the single socket for the tab.
+- [ ] **1.13 Client chat UI.** `client/src/app/rooms/[roomId]/page.tsx` (awaits `params`, renders `<RoomClient roomId>`; moves under `(app)/` in step 2), `client/src/features/room/RoomClient.tsx` (`'use client'`; dev-name prompt, joins the room), `client/src/features/chat/ChatPanel.tsx`, `ChatList.tsx`, `messages/UserMessage.tsx`, `messages/SystemMessage.tsx`, `useStickToBottom.ts`. User text is rendered as text only. `ALLOWED_ORIGINS` already contains `http://localhost:3000`, which is the socket's `Origin`.
 - [ ] **1.14 WebSocket integration tests.** `server/test/ws/`: helper that starts the server on port 0 and opens `ws` clients. Cover: join and chat between two clients, room isolation, late joiner gets the buffer, malformed JSON / unknown action / bad payload replies, oversize message closes the socket, missed pongs terminate the socket (fake timers).
 
 **Verify**
@@ -159,19 +168,24 @@ A copy-and-paste walkthrough of this step, with every file's contents, is in [`s
 
 - [ ] **2.1 Schema and raw SQL.** Prisma models `User` (no `balance` yet), `Session`, `EmailToken`, `AuthEvent`, `SignupClaim`, `Flag`, `NicknameChange`, with the columns and `onDelete` rules from the structure document. Migration `init_auth`. A second raw SQL migration `ci_unique_login_nickname`: `CREATE UNIQUE INDEX ... ON "User" (lower("loginId"))` and the same for `nickname`. Check: `npm run db:migrate` applies both; `test/setup.ts` now truncates all tables between suites.
 - [ ] **2.2 Shared auth contract.** `shared/src/schemas/signup.ts` (loginId `^[A-Za-z0-9]{4,20}$`, nickname `^[A-Za-z0-9]{2,16}$` and not `admin` in any case, email, password 8+), login, reset, find-id, change-email schemas. New error codes: `LOGIN_ID_TAKEN`, `NICKNAME_TAKEN`, `EMAIL_TAKEN`, `SIGNUP_COLLISION`, `EMAIL_NOT_VERIFIED`, `INVALID_CREDENTIALS`, `TOKEN_INVALID`, `BANNED`, `TOR_BLOCKED`. New limits: sign-up, availability, login, resend, change-email (values from "Protocol limits").
-- [ ] **2.3 HTTP plumbing.** `server/src/http/router.ts`: method + path table, JSON body parser with a 16 KB cap, cookie parse/serialise, JSON responses, error mapping. `server/src/security/origin.ts` applied to every non-GET. `server/src/security/client-ip.ts` (trust `X-Forwarded-For` only when `TRUST_PROXY`; IPv6 → /64). A small in-memory rate limiter keyed by IP or account.
+- [ ] **2.3 HTTP plumbing.** `server/src/http/router.ts`: method + path table, JSON body parser with a 16 KB cap, cookie parse/serialise, JSON responses, error mapping. `server/src/security/origin.ts` applied to every non-GET. `server/src/security/client-ip.ts` (trust `X-Forwarded-For` only when the connection comes from an address in `TRUSTED_PROXIES`; IPv6 → /64). A small in-memory rate limiter keyed by IP or account.
 - [ ] **2.4 Security helpers.** `security/passwords.ts` (argon2id hash/verify), `security/email.ts` (trim, lowercase the domain), `security/tor-list.ts` (fetch the public exit list on start and hourly; `isTor(ip)`; a fixture file for tests), `abuse/flags.ts` (`raiseFlag`), `abuse/signals/shared-ip.ts`.
 - [ ] **2.5 Mail.** `server/src/mail/send.ts` with `nodemailer` SMTP transport; templates for verify, reset and find-ID emails. Check: a test email appears in Mailpit.
 - [ ] **2.6 Availability.** `http/auth/availability.ts`: `GET /auth/availability?field=&value=` → format check → existing account check (case-insensitive for loginId/nickname, exact normalized email) → `{ available }` or `{ invalid, reason }`. Rate-limited per IP. Tests for every rule in "Sign-up and availability checks".
 - [ ] **2.7 Sign-up with collisions.** `http/auth/register.ts`: validate → Tor check → existing-account check → insert three `SignupClaim` rows (DB clock) → wait 1 s → look for claims on the same values from another `formToken` within 1 s (`ACTIVE` or `FAILED`) → if found: mark own claims `FAILED`, reply `SIGNUP_COLLISION` → else create the user in a transaction (unique indexes are the final word), delete own claims, record `AuthEvent SIGNUP`, run the shared-IP signal, send the verify email. Same `formToken` twice → the second request awaits and returns the first result (in-memory map of in-flight tokens). Sweeper deletes claims older than 1 minute. Tests: both fail at 0.5 s apart; first wins at 1.2 s apart; double-submit returns one result.
 - [ ] **2.8 Verification, resend, change email.** `http/auth/verify-email.ts` (single-use hashed token, sets `emailVerifiedAt`; the sign-up grant hook is a no-op until step 5), resend (1/min, 10/day), `http/auth/change-email.ts` (unverified only, new address free, old `VERIFY` tokens marked used, new link sent).
-- [ ] **2.9 Sessions, login, logout.** `http/auth/session.ts` (random id, stored hashed, `HttpOnly`, `SameSite=Lax`, `Secure` in production, 30-day sliding; `lastSeenAt` written at most once per 5 minutes), `login.ts` (loginId + password, rate limits, `AuthEvent LOGIN` / `LOGIN_FAILED`, banned → refused, Tor → refused), `logout.ts`, `GET /auth/me` (user, verified flag, role).
+- [ ] **2.9 Sessions, login, logout.** `http/auth/session.ts` (random id, stored hashed, `HttpOnly`, `SameSite=Lax`, `Secure` in production, 30-day sliding; `lastSeenAt` written at most once per 5 minutes), `login.ts` (loginId + password, rate limits, `AuthEvent LOGIN` / `LOGIN_FAILED`, banned → refused, Tor → refused), `logout.ts`, `http/auth/me.ts` — `GET /auth/me` (user, verified flag, role, `config.twitchParentDomains`; 401 without a session). Cookie name `wp_session`, `Path=/`. `security/client-ip.ts` trusts `X-Forwarded-For` only from `TRUSTED_PROXIES`.
 - [ ] **2.10 Reset and find ID.** `password-reset.ts` (request → generic reply, email with single-use token; confirm → new hash, delete all sessions, `AuthEvent RESET`), `find-id.ts` (generic reply; emails the loginId).
 - [ ] **2.11 Tickets.** `http/ws-ticket.ts`: session + verified + not banned + not Tor → 32-byte random ticket in `Map<ticket, { userId, expiresAt }>` (30 s). `ws/upgrade.ts`: redeem with get + delete in one synchronous step; remove the dev identity. Tests: single use, expiry, unverified refused.
 - [ ] **2.12 Cleanup job.** `abuse/retention.ts`: hourly, delete users with `emailVerifiedAt IS NULL AND createdAt < now() - 24h` (cascades), and `AuthEvent` older than 90 days. Test with a shifted clock.
 - [ ] **2.13 Admin seed.** `server/prisma/seed.ts`: upsert the admin from `ADMIN_LOGIN_ID` / `ADMIN_EMAIL` / `ADMIN_PASSWORD`, nickname "Admin", role `ADMIN`, verified. Wire `"prisma": { "seed": ... }` in `server/package.json`.
 - [ ] **2.14 Profiles.** `features/profiles/`: `display.ts` builds `DisplayProfile { userId, nickname }`; snapshot = profiles of users in the room; `onJoin` broadcasts the joiner's profile; `admin:rename_user` (admin only, same nickname rules, logs `NicknameChange`, broadcasts `user:profile_updated`).
-- [ ] **2.15 Client auth.** `lib/api.ts` (fetch with `credentials: 'include'`), `lib/auth.ts` (current user via `/auth/me`), `lib/profiles.ts`, `components/Nickname.tsx`. `features/auth/`: `RegisterPage` (with `formToken` generated on load, top-of-page red banner), `AvailabilityField` + `useAvailabilityCheck` (unchecked / checking / available / taken / invalid; editing resets), `VerifyGate`, `VerifyEmail` landing, `Login`, `Logout`, `FindId`, `ResetPassword`. Route guard: not logged in → Login; unverified → VerifyGate. `socket.ts` fetches a ticket before each connect. Chat messages render names with `<Nickname>`.
+- [ ] **2.15 Server-side data access (Next.js).** `client/src/lib/server/api.ts` (`import 'server-only'`): `apiGet(path)` reads the incoming request with `await cookies()` and `await headers()`, forwards the `cookie` header and an `X-Forwarded-For` header to `INTERNAL_API_URL`, `cache: 'no-store'`; returns `null` on 401. `getMe()` wraps `/auth/me`.
+- [ ] **2.16 Route protection.**
+  - `client/src/proxy.ts`: `matcher` excludes `_next`, static files, `/login`, `/register`, `/verify-email`, `/find-id`, `/reset-password`, `/auth`, `/api`, `/health`; if the request has no `wp_session` cookie → redirect to `/login?next=<path>`. No other logic.
+  - Route groups: move the room page to `client/src/app/(app)/rooms/[roomId]/page.tsx`; `client/src/app/(app)/layout.tsx` (server): `getMe()` → `null` → `redirect('/login')`, unverified → `redirect('/verify')`; renders the header and `<ClientProviders me={me}>`. `client/src/app/(app)/admin/layout.tsx`: role `ADMIN` or `notFound()`. `client/src/app/verify/page.tsx`: session required, verified users → `redirect('/')`.
+  - Tests (manual, then a Playwright smoke test later if wanted): no cookie → `/login`; forged cookie → `/login`; unverified → `/verify`; user on `/admin/rooms` → 404.
+- [ ] **2.17 Client auth pages.** `lib/api.ts` (browser fetch to same-origin `/auth/*`), `lib/profiles.ts`, `components/Nickname.tsx`. Pages under `client/src/app/(public)/`: `register` (with `formToken` generated on load, top-of-page red banner), `login` (honours `?next=`), `verify-email` (reads `token` from `searchParams`, calls the server, then links to `/`), `find-id`, `reset-password`; `/verify` gate (resend, change email, log out). Components in `features/auth/`: `AvailabilityField` + `useAvailabilityCheck` (unchecked / checking / available / taken / invalid; editing resets). After login/logout, `router.refresh()` so server components re-read the session. `socket.ts` fetches a ticket from `/auth/ws-ticket` before each connect. Chat messages render names with `<Nickname>`.
 
 **Verify**
 - [ ] Full sign-up → Mailpit → verify → login → chat, in the browser.
@@ -185,10 +199,10 @@ A copy-and-paste walkthrough of this step, with every file's contents, is in [`s
 **Tasks**
 
 - [ ] **3.1 Schema.** `Room` model with every column from the structure document (playback columns default to empty / paused). Migration `rooms`.
-- [ ] **3.2 Rooms feature.** `features/rooms/index.ts`: `room:list`, `room:create` and `room:update` (admin only → `FORBIDDEN` otherwise; name 1–60 chars; source and link parsed into `source` / `sourceRef` / `isLive`). `room:join` now checks the room exists (`NOT_FOUND`).
+- [ ] **3.2 Rooms feature.** `features/rooms/index.ts`: `room:create` and `room:update` over the socket (admin only → `FORBIDDEN` otherwise; name 1–60 chars; source and link parsed into `source` / `sourceRef` / `isLive`). `room:join` now checks the room exists (`NOT_FOUND`). `server/src/http/api/rooms.ts`: `GET /api/rooms` and `GET /api/rooms/:id` (session required → 401; unknown id → 404).
 - [ ] **3.3 Presence.** `features/rooms/presence.ts`: unique `userId`s per room computed from `rooms.ts`; broadcast `room:presence { watching }` on join/leave, coalesced to at most one per 2 s per room; included in the snapshot.
 - [ ] **3.4 Reconnect contract.** Client store keeps the highest version per stream (chat `seq` now; others as they arrive). On reconnect: new ticket → connect → rejoin → apply snapshot → drop queued events older than the snapshot. Test: restart the server with two connected clients; both recover without duplicates.
-- [ ] **3.5 Client.** `features/room/RoomList.tsx`, room page layout (player placeholder left, rail + chat right, "N watching"), header (logo, rooms link, nickname, logout). `features/admin/`: admin shell with tabs and the "Create a room" panel.
+- [ ] **3.5 Client.** `client/src/app/(app)/page.tsx` (server: `getRooms()` → `features/room/RoomList.tsx`), `client/src/app/(app)/rooms/[roomId]/page.tsx` (server: `getRoom(id)` → `notFound()` on 404; renders the room name and source, then `<RoomClient>`), room page layout (player placeholder left, rail + chat right, "N watching"), header in the `(app)` layout (logo, rooms link, nickname, logout). `client/src/app/(app)/admin/rooms/page.tsx`: admin shell with tabs and the "Create a room" panel; after `room:create` succeeds, `router.refresh()`.
 
 **Verify**
 - [ ] Admin creates a room; a user sees it in the list and joins; "watching" updates in both tabs within 2 s.
@@ -203,9 +217,9 @@ A copy-and-paste walkthrough of this step, with every file's contents, is in [`s
 - [ ] **4.1 Shared.** `shared/src/domain/playback.ts` (`VideoSource`, `PlaybackState` with `playbackVersion`), schemas for `playback:load/play/pause/seek`, `shared/src/domain/time.ts` helpers.
 - [ ] **4.2 Server.** `features/playback/state.ts` (read/write `Room` playback columns; every change bumps `playbackVersion` and sets `positionUpdatedAt` from the DB clock), `features/playback/index.ts` (admin-only actions, broadcast `playback:state`, snapshot piece). Every message carries `serverTime`.
 - [ ] **4.3 Client clock.** `lib/server-clock.ts`: offset = `serverTime − Date.now()` from the snapshot and each state, smoothed.
-- [ ] **4.4 Player.** `features/player/VideoPlayer.tsx`, `adapters/youtube.ts` (IFrame API loader, play/pause/seek/getCurrentTime), `usePlaybackSync.ts` (VOD: every 3 s compare with the expected position, seek if > 1.5 s off; ignore lower versions; live: just play). Badges: source + "In sync with Admin".
+- [ ] **4.4 Player.** `features/player/VideoPlayer.tsx` (imported in `RoomClient` with `next/dynamic(..., { ssr: false })`), `adapters/youtube.ts` (IFrame API loader, play/pause/seek/getCurrentTime), `usePlaybackSync.ts` (VOD: every 3 s compare with the expected position, seek if > 1.5 s off; ignore lower versions; live: just play). Badges: source + "In sync with Admin".
 - [ ] **4.5 Admin controls.** Playback panel on the admin page: play/pause for everyone, −10 s / +10 s, load a different video.
-- [ ] **4.6 Twitch.** `adapters/twitch.ts` (embed script, `parent` from `TWITCH_PARENT_DOMAINS` exposed through the snapshot or `/auth/me` config), live channel and VOD modes.
+- [ ] **4.6 Twitch.** `adapters/twitch.ts` (embed script, `parent` from `me.config.twitchParentDomains`, passed down from the `(app)` layout), live channel and VOD modes.
 
 **Verify**
 - [ ] Two users and the admin stay within 1.5 s through play, pause, seek and a late join (YouTube VOD, then Twitch VOD).
@@ -233,7 +247,7 @@ A copy-and-paste walkthrough of this step, with every file's contents, is in [`s
 - [ ] **5.5 Sign-up grant.** Hook into verify-email: `SIGNUP_GRANT` 5,000 `HOUSE → USER`, `refId = user:<id>`, in the same transaction as setting `emailVerifiedAt`.
 - [ ] **5.6 Lucky box.** `features/bonus/lucky-box.ts`: `bonus:open_lucky_box` → claim `LUCKY_BOX` → `crypto.randomInt(10, 10001)` → `LUCKY_BOX` `HOUSE → USER`, `refId = luckybox:<userId>:<day>`; reply with the amount; snapshot piece `{ availableToday, nextResetAt }`.
 - [ ] **5.7 Reconcile.** `server/scripts/reconcile.ts`: every `User.balance` = sum of its `USER:<id>` entries; every settled/voided window's escrow = 0 (from step 6); exit code 1 on any mismatch. `server/test/teardown` runs it after the suite.
-- [ ] **5.8 Client.** Balance chip in the header (negative in red), `features/bonus/LuckyBoxChip.tsx` ("Daily box ready" / next-box countdown), `LuckyBoxDialog.tsx` (reveals the server's amount).
+- [ ] **5.8 Client.** `/auth/me` gains `balance`, `ledgerTxId` and `luckyBox { availableToday, nextResetAt }`; the `(app)` layout passes them into `<ClientProviders>`, which seeds the balance store (a later `balance:updated` only applies if its `ledgerTxId` is higher). Balance chip in the header (negative in red), `features/bonus/LuckyBoxChip.tsx` ("Daily box ready" / next-box countdown), `LuckyBoxDialog.tsx` (reveals the server's amount).
 - [ ] **5.9 Tests.** Sum-to-zero assertion, idempotent grant, checked debit rollback, forced debit limited to `BET_PENALTY`, crossing debits in parallel (100 iterations) never deadlock and reconcile, lucky box once per Tokyo day across the 00:00 JST boundary.
 
 **Verify**

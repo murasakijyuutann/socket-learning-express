@@ -1,6 +1,6 @@
 # Watch-party platform — project structure
 
-**Stack:** Vite + React + TS (`client/`) · Node.js + TS with built-in `http` and the `ws` library (`server/`) · PostgreSQL + Prisma · npm workspaces
+**Stack:** Next.js (App Router) + React + TS (`client/`, frontend only) · Node.js + TS with built-in `http` and the `ws` library (`server/`, the only backend) · PostgreSQL + Prisma · npm workspaces
 
 **Repository:** `socket-learning/`. This document is the only architecture document. Older docs (the AWS Lambda/DynamoDB setup and the earlier playback-sync map) were removed and are superseded.
 
@@ -90,6 +90,13 @@ Superseded (pp. 1, 4, 5; kept for reference only, don't build from them): "Viewe
   - **Schema:** `Bet.basePayout` + `bonusPayout` → `Bet.payout`; ledger reasons `BET_BONUS` and `ROUNDING` removed, `BET_COLLECT` added.
   - **Voids:** no winners, admin cancel and admin void all refund every stake automatically and return spent double-down tickets; the admin doesn't need a reason.
   - **Copy:** settled results read "The house paid {winners} winners {points} pts."
+- 2026-10-01, Next.js frontend:
+  - **Frontend:** `client/` is a Next.js App Router app instead of Vite + React Router. It's frontend only: no route handlers, no server actions, no database access.
+  - **Rendering:** server components fetch first data (`/auth/me`, `GET /api/rooms`, `GET /api/rooms/:id`) with the user's cookie; live state still comes only from the socket.
+  - **Protection:** `proxy.ts` redirects to `/login` when there's no session cookie; the `(app)` server layout validates the session with `/auth/me` and handles unverified and admin redirects.
+  - **Ports and routing:** Next.js on `:3000`, `server/` on `:4000`. Dev rewrites `/auth/*`, `/api/*` and `/health`; the WebSocket connects directly. Production: one domain behind a reverse proxy.
+  - **Server:** new read-only `/api/*` endpoints and an enriched `GET /auth/me`; `room:list` over the socket is replaced by `GET /api/rooms`; `TRUST_PROXY` becomes `TRUSTED_PROXIES`.
+  - **Styling:** unchanged (CSS Modules + theme variables); fonts move from `@fontsource` to `next/font`.
 
 ## Principles
 
@@ -105,19 +112,29 @@ Superseded (pp. 1, 4, 5; kept for reference only, don't build from them): "Viewe
 ## System structure
 
 ```
-┌──────────────────────────────────────────────┐
-│  client/ — Vite + React + TS                 │
-│  player (YouTube / Twitch) · chat · betting  │
-│  lucky box · wallet · admin                  │
-│  (later) shop · fantasy · games · cosmetics  │
-└───────┬───────────────────────────┬──────────┘
-        │ /auth/*  (cookie session) │ /ws?ticket=...  (wss:// in production)
-        │ /auth/ws-ticket           │
-┌───────▼───────────────────────────▼──────────┐
-│  server/ — Node.js + TS, one process         │
+                 Browser
+   │ pages          │ /auth/* /api/*   │ /ws?ticket=...
+   ▼                │ (cookie session) │ (direct; Next.js can't proxy WebSockets)
+┌───────────────────┴────┐             │
+│ client/ — Next.js :3000│             │
+│ App Router, React, TS  │             │
+│ server components fetch│             │
+│ first data from /api + │             │
+│ /auth/me (cookie       │             │
+│ forwarded); client     │             │
+│ components go live     │             │
+│ over the socket        │             │
+│ dev: rewrites /auth/*, │             │
+│ /api/* → :4000         │             │
+└───────┬────────────────┘             │
+        │ /auth/* /api/* (rewrites in dev; the reverse proxy in production)
+┌───────▼──────────────────────────────▼───────┐
+│  server/ — Node.js + TS, one process  :4000  │
 │                                              │
 │  http.createServer                           │
 │   ├─ /auth/*    Origin check on every POST   │
+│   ├─ /api/*     read-only data for server    │
+│   │             rendering (rooms, …)         │
 │   ├─ /auth/ws-ticket  session → 30s ticket   │
 │   └─ 'upgrade' → check Origin → redeem ticket│
 │                  (atomic get + delete) → ws  │
@@ -165,6 +182,7 @@ socket-learning/
 │   ├── watchparty_app_project-structure.md   # ★ this document (includes the ERD)
 │   ├── watchparty_phases.md          # scope and exit criteria per phase and step
 │   ├── watchparty_execution_plan.md  # ordered tasks and checks per step
+│   ├── guide/                        # hands-on walkthroughs, e.g. step-0-guide.md
 │   ├── Watch-party ERD_ economy and betting.pdf  # older ERD export, layout only
 │   └── watchpartySS/                 # Watch-party betting UI .pdf / .html mockups
 │
@@ -173,7 +191,7 @@ socket-learning/
 │   └── src/
 │       ├── messages/                 # namespaced: <feature>:<verb>
 │       │   ├── client.ts             # every client message: { action, requestId, payload }
-│       │   │                         #   room:list, room:join, room:create/update (admin),
+│       │   │                         #   room:join, room:create/update (admin),
 │       │   │                         #   chat:send, playback:load/play/pause/seek,
 │       │   │                         #   window:open/lock/extend/settle/void (void works
 │       │   │                         #   from OPEN or LOCKED), bet:place,
@@ -213,26 +231,56 @@ socket-learning/
 │           ├── economy.ts            # account ids, LedgerReason
 │           └── time.ts               # serverTime + closesAt → countdown helpers
 │
-├── client/                           # Vite + React + TS
-│   ├── package.json
-│   ├── index.html
-│   ├── vite.config.ts                # dev proxy: /auth → :3000, /ws → :3000 (ws: true)
+├── client/                           # Next.js (App Router) + React + TS — frontend only:
+│   │                                 #   no database, no business rules, no app/api routes
+│   ├── package.json                  # next dev / next build / next start on :3000
+│   ├── next.config.ts                # transpilePackages: ["@watchparty/shared"];
+│   │                                 #   rewrites /auth/*, /api/*, /health → INTERNAL_API_URL
+│   ├── eslint.config.mjs             # Next.js ESLint config (+ eslint-config-prettier)
+│   ├── .env.example                  # INTERNAL_API_URL, NEXT_PUBLIC_WS_URL
 │   └── src/
-│       ├── main.tsx
-│       ├── app/                      # React Router routes, layout, providers
+│       ├── proxy.ts                  # fast pre-check ("middleware" before Next.js 16):
+│       │                             #   no session cookie on a protected path →
+│       │                             #   redirect /login; never decides anything else
+│       ├── app/                      # routes (see "Frontend (Next.js)")
+│       │   ├── layout.tsx            # root: next/font, tokens.css, global.css
+│       │   ├── (public)/             # login, register, verify-email, find-id,
+│       │   │                         #   reset-password — no session needed
+│       │   ├── verify/page.tsx       # the verify gate (session, unverified)
+│       │   └── (app)/                # needs a verified session
+│       │       ├── layout.tsx        # server: getMe() → redirect /login or /verify;
+│       │       │                     #   header (balance, lucky box) from getMe();
+│       │       │                     #   <ClientProviders> (stores + socket)
+│       │       ├── page.tsx          # room list, server-rendered from GET /api/rooms
+│       │       ├── rooms/[roomId]/page.tsx  # server: GET /api/rooms/:id (name, source)
+│       │       │                            #   → <RoomClient> joins over the socket
+│       │       └── admin/            # layout: role ADMIN or notFound()
+│       │           ├── rooms/page.tsx     # rooms & playback, renames
+│       │           ├── betting/page.tsx   # open and settle windows
+│       │           ├── users/page.tsx     # (phase 3) users, moderation
+│       │           └── flags/page.tsx     # (phase 3) flags and reports queues
 │       ├── lib/
-│       │   ├── socket.ts             # native WebSocket: fetch ticket → connect,
+│       │   ├── server/               # server-only (import "server-only")
+│       │   │   └── api.ts            # fetch INTERNAL_API_URL with the incoming cookie
+│       │   │                         #   and X-Forwarded-For; getMe(), getRooms(), getRoom()
+│       │   ├── socket.ts             # native WebSocket: fetch ticket → connect to
+│       │   │                         #   NEXT_PUBLIC_WS_URL (or same-origin /ws),
 │       │   │                         #   reconnect with backoff, typed send()/on(),
 │       │   │                         #   matches replies to actions by requestId
 │       │   ├── server-clock.ts       # offset = serverTime − Date.now()
 │       │   ├── request-id.ts         # crypto.randomUUID() per action
 │       │   ├── profiles.ts           # Map<userId, DisplayProfile>
-│       │   ├── api.ts                # fetch wrapper (credentials: "include")
-│       │   └── store.ts              # Zustand stores fed by socket events
+│       │   ├── api.ts                # browser fetch wrapper (same origin, /auth/*)
+│       │   └── stores/               # Zustand vanilla stores created per provider
+│       │                             #   (never module-level: the Next.js server would
+│       │                             #   share them between requests); seeded with the
+│       │                             #   server-rendered data, then fed by socket events
+│       ├── styles/                   # tokens.css (theme variables), global.css
 │       ├── components/
+│       │   ├── ClientProviders.tsx   # "use client": stores + one socket for the session
 │       │   ├── Nickname.tsx          # ★ the only way a name is rendered
 │       │   └── ui/
-│       └── features/
+│       └── features/                 # "use client" components unless noted
 │           ├── auth/
 │           │   ├── VerifyGate.tsx    # the only screen an unverified user can reach:
 │           │   │                     #   resend link, change email, log out
@@ -244,11 +292,12 @@ socket-learning/
 │           │   │                            #   editing the field resets it
 │           │   └── VerifyEmail, Login, Logout, FindId, ResetPassword pages
 │           ├── room/
-│           │   ├── RoomPage.tsx
-│           │   ├── RoomList.tsx      # rooms the admin has created
+│           │   ├── RoomClient.tsx    # joins the room, renders player + rail + chat
+│           │   ├── RoomList.tsx      # server component: rooms the admin has created
 │           │   └── useRoomSnapshot.ts   # applies room:snapshot on (re)connect
 │           ├── player/
-│           │   ├── VideoPlayer.tsx   # picks the adapter by source
+│           │   ├── VideoPlayer.tsx   # picks the adapter by source; loaded with
+│           │   │                     #   next/dynamic { ssr: false } (browser-only APIs)
 │           │   ├── adapters/
 │           │   │   ├── youtube.ts    # YouTube IFrame Player API
 │           │   │   └── twitch.ts     # Twitch embed (live channel or VOD)
@@ -292,7 +341,7 @@ socket-learning/
 │           ├── (later) shop/
 │           ├── (later) fantasy/
 │           ├── (later) rail/ActivityRail.tsx
-│           ├── (later) games/        # React.lazy per game: dice/, horse-race/
+│           ├── (later) games/        # next/dynamic per game: dice/, horse-race/
 │           └── (later) cosmetics/
 │
 └── server/                           # Node.js + TS + ws (replaces the old JS code)
@@ -325,9 +374,16 @@ socket-learning/
         │                             #   retry on 40P01 / 40001
         ├── features.ts               # ★ registered features
         ├── http/
-        │   ├── router.ts             # GET /health; /auth/* below; GET /auth/me (current
-        │   │                         #   user, verified flag, role)
+        │   ├── router.ts             # GET /health; /auth/* and /api/* below
+        │   ├── api/                  # read-only JSON for Next.js server components;
+        │   │   │                     #   session required (401 otherwise); never changes state
+        │   │   └── rooms.ts          # GET /api/rooms (list), GET /api/rooms/:id (name,
+        │   │                         #   source, isLive) — live state comes from the socket
         │   ├── auth/
+        │   │   ├── me.ts             # GET /auth/me → user (id, nickname, role, verified),
+        │   │   │                     #   balance + ledgerTxId (from step 5), lucky box
+        │   │   │                     #   { availableToday, nextResetAt }, config
+        │   │   │                     #   { twitchParentDomains }; 401 without a session
         │   │   ├── availability.ts   # GET /auth/availability?field=loginId|nickname|email
         │   │   │                     #   &value=… → { available } or { invalid, reason };
         │   │   │                     #   validates the format first; rate-limited per IP
@@ -344,8 +400,8 @@ socket-learning/
         │   │   │                     #   update emailNormalized → mark old VERIFY tokens used
         │   │   │                     #   → send a new link; rate-limited
         │   │   ├── login.ts          # loginId + password; rate limit; AuthEvent;
-        │   │   │                     #   Set-Cookie session (HttpOnly, Secure in prod,
-        │   │   │                     #   SameSite=Lax); banned → rejected
+        │   │   │                     #   Set-Cookie wp_session (HttpOnly, Secure in prod,
+        │   │   │                     #   SameSite=Lax, Path=/); banned → rejected
         │   │   ├── logout.ts
         │   │   ├── session.ts        # cookie → Session → user; expired/banned → 401
         │   │   ├── find-id.ts        # emails the loginId; generic reply either way
@@ -355,8 +411,9 @@ socket-learning/
         │                             #   ticket; unverified → 403 EMAIL_NOT_VERIFIED
         │                             #   (in-memory Map; fine for a single instance)
         ├── security/                 # prevention: things that are blocked
-        │   ├── client-ip.ts          # trust X-Forwarded-For only from our proxy;
-        │   │                         #   IPv6 → /64
+        │   ├── client-ip.ts          # trust X-Forwarded-For only when the direct peer is
+        │   │                         #   in TRUSTED_PROXIES (the reverse proxy and the
+        │   │                         #   Next.js server); IPv6 → /64
         │   ├── origin.ts             # CSRF: state-changing HTTP requests and the ws
         │   │                         #   upgrade must come from an allowed Origin
         │   ├── tor-list.ts           # refreshes the public Tor exit list hourly
@@ -467,19 +524,22 @@ npm install                 # installs all workspaces from the root
 npm run db:up               # docker compose up -d  (postgres + mailpit)
 npm run db:migrate          # prisma migrate dev
 npm run db:seed             # creates the admin account from .env
-npm run dev                 # server on :3000, client on :5173
+npm run dev                 # server (API + WebSocket) on :4000, Next.js on :3000
 npm test                    # vitest, against the test database
 ```
+
+Open the app at `http://localhost:3000`. The browser never needs `:4000` except for the WebSocket.
 
 **`server/.env.example`**
 
 ```
-PORT=3000
+NODE_ENV=development
+PORT=4000
 DATABASE_URL=postgresql://watchparty:watchparty@localhost:5432/watchparty
 TEST_DATABASE_URL=postgresql://watchparty:watchparty@localhost:5432/watchparty_test
-ALLOWED_ORIGINS=http://localhost:5173
+ALLOWED_ORIGINS=http://localhost:3000
 SESSION_TTL_DAYS=30
-TRUST_PROXY=false
+TRUSTED_PROXIES=127.0.0.1,::1   # peers whose X-Forwarded-For is trusted (Next.js, reverse proxy)
 SMTP_HOST=localhost
 SMTP_PORT=1025              # Mailpit; its web UI is on :8025
 MAIL_FROM=watchparty@localhost
@@ -489,9 +549,36 @@ ADMIN_EMAIL=
 ADMIN_PASSWORD=
 ```
 
+**`client/.env.example`** (copy to `client/.env.local`)
+
+```
+INTERNAL_API_URL=http://localhost:4000     # used by the Next.js server: rewrites and server-component fetches
+NEXT_PUBLIC_WS_URL=ws://localhost:4000/ws  # used by the browser; leave empty in production to use same-origin /ws
+```
+
 **Tests:** Vitest. The economy and betting tests run against a real Postgres test database, not mocks, because the point of those tests is locking and constraint behaviour. The concurrency tests fire parallel requests, for example 20 bets racing the auto-lock, or two users transferring to each other at the same moment.
 
-**Lint and format:** ESLint + Prettier across all workspaces.
+**Lint and format:** ESLint + Prettier across all workspaces. `client/` keeps the Next.js ESLint config in its own `eslint.config.mjs`; the root config covers `server/` and `shared/`.
+
+## Frontend (Next.js)
+
+Next.js is the frontend only. Every rule, every write and every live update lives in `server/`; the Next.js server's only jobs are rendering pages, forwarding `/auth/*` and `/api/*` in development, and fetching first data for server components.
+
+| Rule | Decision |
+|---|---|
+| Router | App Router, `src/` directory, TypeScript. No `app/api` route handlers and no server actions: the browser talks to `server/` for every write. |
+| Rendering | Server components fetch the first data a page needs, then client components take over and stay live over the socket. Server-rendered: the logged-in user and header (balance, lucky box) from `GET /auth/me`, the room list from `GET /api/rooms`, the room page shell (name, source) from `GET /api/rooms/:id`, admin lists. Live (socket snapshot + events, never server-rendered): chat, playback state, presence, betting windows, bets, odds. |
+| Server-side fetches | `lib/server/api.ts` (marked `server-only`) calls `INTERNAL_API_URL` with the incoming request's `cookie` header and an `X-Forwarded-For` header, with `cache: "no-store"`. A `401` means "not logged in". |
+| Hand-off to the client | Server data is passed as props into `<ClientProviders>`, which creates the Zustand stores per request (never module-level, so two users' data can't mix on the server) and seeds them. Socket events then update the stores; versions (`ledgerTxId`, `seq`, `playbackVersion`, `window.version`) stop a late event from overwriting newer data, and stop server-rendered data from overwriting a newer socket update. |
+| Socket | One socket per browser tab, opened by `<ClientProviders>` in the `(app)` layout, so it survives navigation between pages. It fetches a ticket from `/auth/ws-ticket` (same origin, cookie sent), then connects directly to `NEXT_PUBLIC_WS_URL` (dev: `ws://localhost:4000/ws`) or, when that's empty, to `wss://<same host>/ws` in production. Next.js can't proxy WebSockets, which is fine: the ticket, not a cookie, authenticates the socket. |
+| Route protection | Two layers. `src/proxy.ts` ("middleware" before Next.js 16) is a fast pre-check: on a protected path with no session cookie at all, redirect to `/login?next=…`; it never reads the database or decides anything else. The `(app)` server layout calls `getMe()`: `401` → `/login`, unverified → `/verify`; the `admin` layout additionally requires role `ADMIN` (`notFound()` otherwise). `/verify` requires a session and redirects verified users to `/`. Every real decision is still made by `server/` on each request. |
+| Routes | `/login`, `/register`, `/verify-email?token=…`, `/find-id`, `/reset-password?token=…` (public) · `/verify` (session, unverified) · `/` room list · `/rooms/[roomId]` · `/admin/rooms`, `/admin/betting`, later `/admin/users`, `/admin/flags` |
+| Browser-only code | The video player (YouTube IFrame API, Twitch embed) is loaded with `next/dynamic` and `ssr: false`. Anything using `window`, `WebSocket` or timers lives in client components. |
+| Fonts and styles | `next/font/google` (self-hosted at build time): Barlow Condensed 600, IBM Plex Sans 400/600, JetBrains Mono 600, exposed as `--font-display`, `--font-body`, `--font-num`. CSS Modules plus the theme variables in `styles/tokens.css`. No Tailwind. |
+| Shared code | `@watchparty/shared` is TypeScript source; `next.config.ts` lists it in `transpilePackages`. |
+| Development routing | `next.config.ts` rewrites `/auth/:path*`, `/api/:path*` and `/health` to `INTERNAL_API_URL`, so the browser only talks to `:3000` (cookies are same-origin) except for the WebSocket. `ALLOWED_ORIGINS` is `http://localhost:3000`. |
+| Production routing | One domain behind a reverse proxy (Caddy) on the same machine: `/auth/*`, `/api/*`, `/ws` and `/health` go to `server/` (`:4000`), everything else to `next start` (`:3000`). Cookies stay first-party, the WebSocket is same-origin (`wss://<domain>/ws`), and `ALLOWED_ORIGINS` is `https://<domain>`. The rewrites in `next.config.ts` are unused there because the proxy routes first. |
+| Client IP | Requests reach `server/` through the reverse proxy or the Next.js server, so `client-ip.ts` trusts `X-Forwarded-For` only from peers in `TRUSTED_PROXIES`. |
 
 ## Rooms and playback
 
@@ -889,7 +976,7 @@ Points are free, can't be bought and can't be cashed out, so economy exploits on
 2. Create `server/src/features/<name>/index.ts` exporting a `Feature`.
 3. Add it to `server/src/features.ts`. This is the only change to shared code.
 4. Move points only through `server/src/economy/ledger.ts`, with a new `LedgerReason`.
-5. Build the UI under `client/src/features/<name>/` and load it with `React.lazy`.
+5. Build the UI under `client/src/features/<name>/` and load it with `next/dynamic`. If a page needs first data, add a read-only `GET /api/...` endpoint on the server and fetch it in a server component through `lib/server/api.ts`.
 6. Use `<Nickname>` for names, and add a `ChatMessage` kind if the feature posts to chat.
 
 ## Future features: design notes
@@ -912,7 +999,7 @@ Points are free, can't be bought and can't be cashed out, so economy exploits on
 Nothing past phase 2 is built until a watch party and a betting window work end to end. Scope and exit criteria per step are in [`watchparty_phases.md`](./watchparty_phases.md); the ordered tasks are in [`watchparty_execution_plan.md`](./watchparty_execution_plan.md).
 
 **Phase 1: core MVP**
-0. Dev setup: root workspaces, `shared/`, TypeScript, docker-compose, `.env.example`, Vite proxy, Vitest, ESLint. Remove the old Express/Socket.IO dependencies from `server/`.
+0. Dev setup: root workspaces, `shared/`, TypeScript, docker-compose, `.env.example` files, the Next.js app with its rewrites, Vitest, ESLint. Remove the old Express/Socket.IO dependencies from `server/`.
 1. `ws/` core (upgrade, dispatch with `requestId` echo, the feature registry, snapshot ordering) and chat with room `seq`, using a temporary dev identity. This is a TypeScript port of the earlier `socket-learning` server, reshaped as the first registered feature.
 2. Auth: sign-up with the three availability checks, email verification (Mailpit) with the verify-email gate and 24-hour cleanup, login and cookie sessions, logout, password reset, find ID, CSRF origin checks, `AuthEvent`, the Tor block, the ws ticket, the admin seed, and profiles with `<Nickname>`.
 3. Rooms (admin creates them), `room:presence` and reconnect handling.

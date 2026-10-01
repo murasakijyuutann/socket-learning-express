@@ -1,18 +1,19 @@
 # Step 0 guide: dev setup
 
-A hands-on walkthrough of step 0 from [`watchparty_execution_plan.md`](./watchparty_execution_plan.md). Follow the parts in order; each one ends with a checkpoint. When every checkpoint passes, step 0 is done.
+A hands-on walkthrough of step 0 from [`watchparty_execution_plan.md`](../watchparty_execution_plan.md). Follow the parts in order; each one ends with a checkpoint. When every checkpoint passes, step 0 is done.
 
-**What you'll have at the end:** one repository with three packages (`shared`, `server`, `client`) that install, lint, typecheck, test and run with one command each, plus Postgres and Mailpit running in Docker.
+**What you'll have at the end:** one repository with three packages (`shared`, `server`, `client`) that install, lint, typecheck, test, build and run with one command each, plus Postgres and Mailpit running in Docker. The frontend is a Next.js app on `:3000`; the backend (API and, from step 1, WebSockets) is a Node server on `:4000`.
 
 **Time:** about 1–2 hours.
 
-**Shell:** the commands are written for Git Bash (the shell this project already uses). Run every command from the repository root (`d:/Projects/socket-learning`) unless the step says otherwise.
+**Shell:** the commands are written for Git Bash. Run every command from the repository root (`d:/Projects/socket-learning`) unless the step says otherwise.
 
 ## Before you start
 
 - [ ] Node 22 (`node -v` → `v22.x`) and npm 10 (`npm -v`).
 - [ ] Docker Desktop is running (`docker ps` works without an error).
-- [ ] Nothing is using ports 3000, 5173, 5432, 1025 or 8025. On Windows, check with `netstat -ano | grep -E ":(3000|5173|5432|1025|8025) "`; no output means they're free. A locally installed PostgreSQL service often holds 5432; stop it in Services, or see Troubleshooting.
+- [ ] Nothing is using ports 3000, 4000, 5432, 1025 or 8025. Check with `netstat -ano | grep -E ":(3000|4000|5432|1025|8025) "`; no output means they're free. A locally installed PostgreSQL service often holds 5432; stop it in Services, or see Troubleshooting.
+- [ ] Internet access the first time you run the client (`next/font` downloads the fonts once and then serves them itself).
 - [ ] Create a branch: `git checkout -b step-0-dev-setup`.
 
 ## How the pieces fit
@@ -21,9 +22,20 @@ A hands-on walkthrough of step 0 from [`watchparty_execution_plan.md`](./watchpa
 socket-learning/
 ├── package.json         ← root: lists the three workspaces, holds shared dev tools (TypeScript, ESLint, Prettier)
 ├── shared/              ← @watchparty/shared: code both sides import, used as TypeScript source (no build step)
-├── server/              ← Node + TypeScript; run with tsx in dev, bundled with tsup for production
-├── client/              ← Vite + React + TypeScript
+├── server/              ← Node + TypeScript on :4000 — the only backend (database, auth, WebSockets)
+├── client/              ← Next.js on :3000 — frontend only (pages; no database, no business rules)
 └── docker-compose.yml   ← Postgres 16 (dev + test databases) and Mailpit (catches emails in dev)
+```
+
+How a request travels in development:
+
+```
+Browser ──▶ :3000 Next.js ──(page HTML)
+   │            │ server components fetch http://localhost:4000/... directly
+   │            │ /auth/*, /api/*, /health are rewritten to :4000
+   │            ▼
+   │        :4000 server
+   └── WebSocket (from step 1) goes straight to ws://localhost:4000/ws
 ```
 
 npm **workspaces** mean there's one `node_modules/` and one `package-lock.json` at the root. `npm install` at the root installs all three packages, and `@watchparty/shared` is linked into `node_modules/` so `server` and `client` can `import ... from '@watchparty/shared'`.
@@ -40,7 +52,7 @@ rm -rf server/node_modules server/package-lock.json server/package.json
 
 Leave `server/.env` and `server/.env.example` for now; you'll overwrite them in Part 5.
 
-**Checkpoint:** `ls server` shows only `.env` and `.env.example` (use `ls -a`).
+**Checkpoint:** `ls -a server` shows only `.env` and `.env.example`.
 
 ---
 
@@ -60,7 +72,7 @@ Create each file below at the repository root.
     "dev": "concurrently -n server,client -c blue,magenta \"npm run dev -w server\" \"npm run dev -w client\"",
     "build": "npm run build -w server && npm run build -w client",
     "test": "npm run test --workspaces --if-present",
-    "lint": "eslint .",
+    "lint": "eslint . && npm run lint -w client",
     "format": "prettier --write .",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "db:up": "docker compose up -d",
@@ -72,9 +84,11 @@ Create each file below at the repository root.
 }
 ```
 
-Why: `-w server` runs a script inside that workspace; `--workspaces --if-present` runs it in every workspace that defines it.
+Why: `-w server` runs a script inside that workspace; `--workspaces --if-present` runs it in every workspace that defines it. `lint` runs the root ESLint config (server and shared), then the client's own Next.js config.
 
 ### `tsconfig.base.json`
+
+Used by `shared` and `server`. The client keeps the `tsconfig.json` that Next.js generates.
 
 ```json
 {
@@ -96,7 +110,7 @@ Why: `-w server` runs a script inside that workspace; `--workspaces --if-present
 }
 ```
 
-Why: `moduleResolution: "Bundler"` lets you write `import { x } from './file'` without a `.js` suffix; `tsx`, `tsup`, Vite and Vitest all understand it. `noEmit` because TypeScript only type-checks here; other tools produce the JavaScript.
+Why: `moduleResolution: "Bundler"` lets you write `import { x } from './file'` without a `.js` suffix; `tsx`, `tsup`, Next.js and Vitest all understand it. `noEmit` because TypeScript only type-checks here; other tools produce the JavaScript.
 
 ### `.gitattributes`
 
@@ -104,6 +118,7 @@ Why: `moduleResolution: "Bundler"` lets you write `import { x } from './file'` w
 * text=auto eol=lf
 *.png binary
 *.pdf binary
+*.ico binary
 ```
 
 Why: keeps line endings as LF on Windows so Prettier and Git don't fight over every file.
@@ -125,12 +140,15 @@ Why: keeps line endings as LF on Windows so Prettier and Git don't fight over ev
 ```
 node_modules
 dist
+.next
 coverage
+next-env.d.ts
 package-lock.json
 server/prisma/migrations
 docs/**/*.html
 *.png
 *.pdf
+*.ico
 ```
 
 ### `.gitignore`
@@ -152,8 +170,10 @@ npm-debug.log*
 # build and test output
 dist/
 build/
+.next/
 coverage/
 *.tsbuildinfo
+next-env.d.ts
 
 # OS/editor
 .DS_Store
@@ -246,7 +266,7 @@ mkdir -p shared/src
 }
 ```
 
-Why: `exports` points straight at the TypeScript source. Vite, `tsx`, `tsup` and Vitest all compile TypeScript themselves, so `shared` never needs its own build.
+Why: `exports` points straight at the TypeScript source. Next.js (with `transpilePackages`), `tsx`, `tsup` and Vitest all compile TypeScript themselves, so `shared` never needs its own build.
 
 ### `shared/tsconfig.json`
 
@@ -296,7 +316,7 @@ describe('@watchparty/shared', () => {
 });
 ```
 
-(`APP_NAME` is only there so Part 7's checkpoint can prove both the server and the client import from `shared`.)
+(`APP_NAME` is only there so Part 10's checks can prove both the server and the client import from `shared`.)
 
 ---
 
@@ -327,9 +347,7 @@ mkdir -p server/src/http server/prisma server/test
 }
 ```
 
-Why: `tsx watch` restarts the server when you save a file. `--env-file` is built into Node 22, so no `dotenv` package is needed. `--noExternal @watchparty/shared` tells `tsup` to bundle the shared source into the output, because it isn't a built package.
-
-`db:seed` points at a file that arrives in step 2; that's expected.
+Why: `tsx watch` restarts the server when you save a file. `--env-file` is built into Node 22, so no `dotenv` package is needed. `--noExternal @watchparty/shared` tells `tsup` to bundle the shared source into the output, because it isn't a built package. `db:seed` points at a file that arrives in step 2; that's expected.
 
 ### `server/tsconfig.json`
 
@@ -349,12 +367,12 @@ Overwrite the old file with exactly this:
 
 ```
 NODE_ENV=development
-PORT=3000
+PORT=4000
 DATABASE_URL=postgresql://watchparty:watchparty@localhost:5432/watchparty
 TEST_DATABASE_URL=postgresql://watchparty:watchparty@localhost:5432/watchparty_test
-ALLOWED_ORIGINS=http://localhost:5173
+ALLOWED_ORIGINS=http://localhost:3000
 SESSION_TTL_DAYS=30
-TRUST_PROXY=false
+TRUSTED_PROXIES=127.0.0.1,::1
 SMTP_HOST=localhost
 SMTP_PORT=1025
 MAIL_FROM=watchparty@localhost
@@ -370,7 +388,10 @@ Then make your local copy:
 cp server/.env.example server/.env
 ```
 
-The admin values can stay empty until step 2. `.env` is git-ignored; `.env.example` is committed.
+- `PORT=4000`: Next.js takes 3000.
+- `ALLOWED_ORIGINS=http://localhost:3000`: the browser's pages come from Next.js, so that's the `Origin` the server will see on POSTs and on the WebSocket.
+- `TRUSTED_PROXIES`: from step 2, the server only believes an `X-Forwarded-For` header (the user's real IP) when it comes from these addresses — the Next.js server and, in production, the reverse proxy, both on the same machine.
+- The admin values can stay empty until step 2. `.env` is git-ignored; `.env.example` is committed.
 
 ### `server/src/config.ts`
 
@@ -387,19 +408,14 @@ const list = z
       .filter(Boolean),
   );
 
-const bool = z
-  .enum(['true', 'false'])
-  .default('false')
-  .transform((value) => value === 'true');
-
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  PORT: z.coerce.number().int().positive().default(3000),
+  PORT: z.coerce.number().int().positive().default(4000),
   DATABASE_URL: z.url(),
   TEST_DATABASE_URL: z.url().optional(),
   ALLOWED_ORIGINS: list,
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
-  TRUST_PROXY: bool,
+  TRUSTED_PROXIES: list,
   SMTP_HOST: z.string().min(1),
   SMTP_PORT: z.coerce.number().int().positive(),
   MAIL_FROM: z.string().min(1),
@@ -469,7 +485,7 @@ export function createServer(): http.Server {
 }
 ```
 
-Why a separate `app.ts`: tests import `createServer()` and listen on a random port, without reading `.env` or taking port 3000. The WebSocket upgrade handler is attached here in step 1.
+Why a separate `app.ts`: tests import `createServer()` and listen on a random port, without reading `.env` or taking port 4000. The WebSocket upgrade handler is attached here in step 1.
 
 ### `server/src/index.ts`
 
@@ -595,65 +611,125 @@ Why this way: without any models there's no Prisma client to query with, but `pr
 
 ---
 
-## Part 6: the client package
+## Part 6: the client package (Next.js)
 
-### Scaffold with Vite
-
-```bash
-npm create vite@latest client -- --template react-ts
-```
-
-If it asks questions:
-- "Use rolldown-vite / experimental?" → **No**
-- "Install with npm and start now?" → **No** (you'll install everything at once in Part 7)
-
-### Remove what the root already provides or you don't need
-
-The template ships its own ESLint setup; the root config (Part 8) replaces it.
+### Scaffold
 
 ```bash
-rm -f client/eslint.config.js client/src/App.css client/src/index.css client/README.md
-rm -rf client/src/assets
+npx create-next-app@16 client --ts --app --src-dir --eslint --no-tailwind --no-react-compiler \
+  --import-alias "@/*" --use-npm --skip-install --disable-git
 ```
 
-Open `client/package.json` and:
-- delete the `"lint"` script;
-- delete these from `devDependencies`: `eslint`, `@eslint/js`, `globals`, `typescript-eslint`, `eslint-plugin-react-hooks`, `eslint-plugin-react-refresh` (whichever are present);
-- add `"typecheck": "tsc -b"` to `scripts`.
+What the flags mean: TypeScript, App Router, code under `client/src/`, ESLint, no Tailwind, no React Compiler, `@/` as the import alias for `client/src/`, npm, **don't install yet** (Part 7 installs everything at once from the root), and don't create a nested git repository.
 
-The template's `tsconfig.json`, `tsconfig.app.json` and `tsconfig.node.json` stay as they are; they're already strict and set up for Vite.
+If it stops with `unknown option` for one of the flags (flag names change between versions), remove that flag and answer the question it asks instead, using the choices above. If it asks "Would you like to use the recommended Next.js defaults?", choose to customize, because the defaults include Tailwind.
 
-### `client/vite.config.ts`
+### Remove what you don't need
+
+```bash
+rm -f client/package-lock.json client/README.md client/src/app/page.module.css client/src/app/globals.css
+rm -rf client/node_modules client/public/*.svg
+```
+
+(`client/node_modules` and `client/package-lock.json` only exist if the installer ran anyway; a second lockfile confuses npm workspaces and Next.js.)
+
+Open `client/.gitignore` (generated) and add this line below the `.env*` line, so the example file is committed:
+
+```
+!.env.example
+```
+
+### `client/package.json`
+
+Keep the generated `dependencies` and `devDependencies` as they are, and set the name and scripts:
+
+```json
+{
+  "name": "client",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3000",
+    "lint": "eslint .",
+    "typecheck": "next typegen && tsc --noEmit"
+  }
+}
+```
+
+(Merge this with the generated file; don't delete the dependency blocks.)
+
+Why `next typegen`: Next.js generates types for routes and page props; `typegen` writes them without a full build so `tsc` can check everything. If your Next.js version doesn't have `typegen`, use `"typecheck": "tsc --noEmit"`.
+
+### `client/.env.example`
+
+```
+INTERNAL_API_URL=http://localhost:4000
+NEXT_PUBLIC_WS_URL=ws://localhost:4000/ws
+```
+
+Then:
+
+```bash
+cp client/.env.example client/.env.local
+```
+
+- `INTERNAL_API_URL` is read only by the Next.js server: for the rewrites and for server components fetching data.
+- `NEXT_PUBLIC_WS_URL` is built into the browser code (anything starting with `NEXT_PUBLIC_` is). It's used from step 1; in production it stays empty and the client uses `wss://<same host>/ws`.
+
+### `client/next.config.ts`
 
 Replace the file with:
 
 ```ts
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import type { NextConfig } from 'next';
 
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    port: 5173,
-    strictPort: true,
-    proxy: {
-      '/auth': 'http://localhost:3000',
-      '/health': 'http://localhost:3000',
-      '/ws': { target: 'ws://localhost:3000', ws: true },
-    },
+const apiUrl = process.env.INTERNAL_API_URL ?? 'http://localhost:4000';
+
+const nextConfig: NextConfig = {
+  transpilePackages: ['@watchparty/shared'],
+  async rewrites() {
+    return [
+      { source: '/auth/:path*', destination: `${apiUrl}/auth/:path*` },
+      { source: '/api/:path*', destination: `${apiUrl}/api/:path*` },
+      { source: '/health', destination: `${apiUrl}/health` },
+    ];
   },
-});
+};
+
+export default nextConfig;
 ```
 
-Why: in dev the browser only talks to `:5173`; Vite forwards `/auth`, `/health` and `/ws` to the server. Same origin means cookies (step 2) work without CORS setup.
+Why: `transpilePackages` makes Next.js compile `@watchparty/shared` from its TypeScript source. The rewrites forward those paths to the server, so the browser only ever talks to `:3000` (cookies in step 2 stay same-origin). The client never defines its own `app/api` routes; `/api/*` always belongs to the server.
 
-If the template generated `@vitejs/plugin-react-swc` instead of `@vitejs/plugin-react`, keep whichever import the template used.
+### `client/eslint.config.mjs`
 
-### `client/src/styles/tokens.css`
+Replace the generated file with the same config plus Prettier's "turn off formatting rules" config at the end:
+
+```js
+import { defineConfig, globalIgnores } from 'eslint/config';
+import nextVitals from 'eslint-config-next/core-web-vitals';
+import nextTs from 'eslint-config-next/typescript';
+import prettier from 'eslint-config-prettier';
+
+export default defineConfig([
+  ...nextVitals,
+  ...nextTs,
+  prettier,
+  globalIgnores(['.next/**', 'out/**', 'build/**', 'next-env.d.ts']),
+]);
+```
+
+If your generated file looks different (older template), keep its contents and just add `prettier` as the last entry.
+
+### Styles
 
 ```bash
-mkdir -p client/src/styles client/src/app
+mkdir -p client/src/styles client/src/lib/server
 ```
+
+#### `client/src/styles/tokens.css`
 
 ```css
 :root {
@@ -669,17 +745,13 @@ mkdir -p client/src/styles client/src/app
   --win: #3dbe8b;
   --live: #d93a40;
 
-  --font-display: 'Barlow Condensed', system-ui, sans-serif;
-  --font-body: 'IBM Plex Sans', system-ui, sans-serif;
-  --font-num: 'JetBrains Mono', ui-monospace, monospace;
-
   --radius: 10px;
 }
 ```
 
-These come straight from the theme sample mockup.
+These come straight from the theme sample mockup. The font variables (`--font-display`, `--font-body`, `--font-num`) are set by `next/font` in the layout.
 
-### `client/src/styles/global.css`
+#### `client/src/styles/global.css`
 
 ```css
 *,
@@ -689,8 +761,7 @@ These come straight from the theme sample mockup.
 }
 
 html,
-body,
-#root {
+body {
   margin: 0;
   min-height: 100%;
 }
@@ -698,7 +769,7 @@ body,
 body {
   background: var(--ground);
   color: var(--text);
-  font-family: var(--font-body);
+  font-family: var(--font-body), system-ui, sans-serif;
   font-size: 15px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -707,7 +778,7 @@ body {
 h1,
 h2,
 h3 {
-  font-family: var(--font-display);
+  font-family: var(--font-display), system-ui, sans-serif;
   font-weight: 600;
   margin: 0;
 }
@@ -718,65 +789,106 @@ input {
 }
 ```
 
-### `client/src/main.tsx`
+### `client/src/app/layout.tsx`
 
 Replace the file with:
 
 ```tsx
-import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
-import '@fontsource/barlow-condensed/600.css';
-import '@fontsource/ibm-plex-sans/400.css';
-import '@fontsource/ibm-plex-sans/600.css';
-import '@fontsource/jetbrains-mono/600.css';
-import './styles/tokens.css';
-import './styles/global.css';
-import { App } from './app/App';
+import type { Metadata } from 'next';
+import { Barlow_Condensed, IBM_Plex_Sans, JetBrains_Mono } from 'next/font/google';
+import '@/styles/tokens.css';
+import '@/styles/global.css';
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
-```
+const display = Barlow_Condensed({ subsets: ['latin'], weight: '600', variable: '--font-display' });
+const body = IBM_Plex_Sans({ subsets: ['latin'], weight: ['400', '600'], variable: '--font-body' });
+const num = JetBrains_Mono({ subsets: ['latin'], weight: '600', variable: '--font-num' });
 
-### `client/src/app/App.tsx`
+export const metadata: Metadata = {
+  title: 'Watch party',
+};
 
-```tsx
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
-import { HomePage } from './HomePage';
-
-export function App() {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-      </Routes>
-    </BrowserRouter>
+    <html lang="en" className={`${display.variable} ${body.variable} ${num.variable}`}>
+      <body>{children}</body>
+    </html>
   );
 }
 ```
 
-### `client/src/app/HomePage.tsx`
+Why: `next/font/google` downloads the fonts at dev/build time and serves them from your own site, so users never request Google Fonts. Each font sets a CSS variable that the stylesheets use.
+
+### `client/src/lib/server/api.ts`
+
+```ts
+import 'server-only';
+
+const API_URL = process.env.INTERNAL_API_URL ?? 'http://localhost:4000';
+
+export type ApiResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; status: number | null; error: string };
+
+export async function apiGet<T>(path: string): Promise<ApiResult<T>> {
+  try {
+    const res = await fetch(`${API_URL}${path}`, { cache: 'no-store' });
+    if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
+    return { ok: true, data: (await res.json()) as T };
+  } catch (error) {
+    return {
+      ok: false,
+      status: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+```
+
+Why: this is the one place server components call the backend. `import 'server-only'` makes the build fail if a client component ever imports it. `cache: 'no-store'` because this data is per-user and live; Next.js must never cache it. In step 2 this function starts forwarding the user's cookie.
+
+### `client/src/app/ClientHealth.tsx`
 
 ```tsx
+'use client';
+
 import { useEffect, useState } from 'react';
-import { APP_NAME } from '@watchparty/shared';
-import styles from './HomePage.module.css';
+import styles from './page.module.css';
 
-type Health = { state: 'loading' } | { state: 'ok' } | { state: 'error'; message: string };
-
-export function HomePage() {
-  const [health, setHealth] = useState<Health>({ state: 'loading' });
+export function ClientHealth() {
+  const [status, setStatus] = useState<string>('checking…');
 
   useEffect(() => {
     fetch('/health')
       .then(async (res) => {
         const body = (await res.json()) as { ok?: boolean };
-        setHealth(body.ok ? { state: 'ok' } : { state: 'error', message: `HTTP ${res.status}` });
+        setStatus(body.ok ? 'ok' : `HTTP ${res.status}`);
       })
-      .catch((error: unknown) => setHealth({ state: 'error', message: String(error) }));
+      .catch((error: unknown) => setStatus(String(error)));
   }, []);
+
+  return (
+    <p className={styles.status}>
+      From the browser (through the rewrite):{' '}
+      <span className={status === 'ok' ? styles.ok : styles.error}>{status}</span>
+    </p>
+  );
+}
+```
+
+### `client/src/app/page.tsx`
+
+Replace the file with:
+
+```tsx
+import { APP_NAME } from '@watchparty/shared';
+import { apiGet } from '@/lib/server/api';
+import { ClientHealth } from './ClientHealth';
+import styles from './page.module.css';
+
+export const dynamic = 'force-dynamic';
+
+export default async function HomePage() {
+  const health = await apiGet<{ ok: boolean }>('/health');
 
   return (
     <main className={styles.page}>
@@ -785,17 +897,22 @@ export function HomePage() {
       </h1>
       <p className={styles.muted}>Shared package says: {APP_NAME}</p>
       <p className={styles.status}>
-        Server:{' '}
-        {health.state === 'loading' && 'checking…'}
-        {health.state === 'ok' && <span className={styles.ok}>ok</span>}
-        {health.state === 'error' && <span className={styles.error}>{health.message}</span>}
+        Rendered on the server:{' '}
+        {health.ok && health.data.ok ? (
+          <span className={styles.ok}>ok</span>
+        ) : (
+          <span className={styles.error}>{health.ok ? 'unexpected reply' : health.error}</span>
+        )}
       </p>
+      <ClientHealth />
     </main>
   );
 }
 ```
 
-### `client/src/app/HomePage.module.css`
+Why two checks: they prove the two ways the frontend reaches the backend. The first line is fetched by the Next.js server while it renders the page (the pattern used for the room list and the header later). The second is fetched by the browser through the rewrite (the pattern used for sign-up and login). `force-dynamic` stops `next build` from trying to pre-render this page while the server isn't running.
+
+### `client/src/app/page.module.css`
 
 ```css
 .page {
@@ -821,7 +938,7 @@ export function HomePage() {
 }
 
 .status {
-  font-family: var(--font-num);
+  font-family: var(--font-num), ui-monospace, monospace;
   margin: 0;
 }
 
@@ -841,9 +958,9 @@ export function HomePage() {
 Now every workspace has a `package.json`, so install from the root. Run these one by one.
 
 ```bash
-# Root: shared dev tools
-npm install -D typescript concurrently prettier eslint@9 @eslint/js typescript-eslint \
-  eslint-plugin-react-hooks eslint-plugin-react-refresh globals eslint-config-prettier
+# Root: shared dev tools (server + shared linting, formatting)
+npm install -D typescript@5 concurrently prettier eslint@9 @eslint/js typescript-eslint \
+  globals eslint-config-prettier
 
 # Shared
 npm install -w shared zod@4
@@ -853,9 +970,8 @@ npm install -w shared -D vitest
 npm install -w server ws zod@4 @prisma/client@6
 npm install -w server -D prisma@6 tsx tsup vitest @types/node@22 @types/ws
 
-# Client (the template's own dependencies are installed by this too)
-npm install -w client react-router-dom zustand \
-  @fontsource/barlow-condensed @fontsource/ibm-plex-sans @fontsource/jetbrains-mono
+# Client (also installs what create-next-app listed: next, react, eslint-config-next, …)
+npm install -w client zustand server-only
 ```
 
 Now link the shared package by hand. `npm install @watchparty/shared` would look for it on the public registry, so instead add this line to the `"dependencies"` block of **both** `server/package.json` and `client/package.json`:
@@ -870,50 +986,38 @@ Then run a plain install from the root so npm links it:
 npm install
 ```
 
-Why the pinned majors: Prisma 6 because Prisma 7 changes how the client is generated; zod 4 because `config.ts` uses zod 4's `z.url()`; ESLint 9 because the config in Part 8 is written for it; `@types/node@22` to match your Node version.
+Why the pinned majors: Prisma 6 because Prisma 7 changes how the client is generated; zod 4 because `config.ts` uses zod 4's `z.url()`; ESLint 9 and TypeScript 5 to match what Next.js 16 is built for; `@types/node@22` to match your Node version.
 
 **Checkpoint**
 - There's a single `package-lock.json` at the root and none inside `server/`, `client/` or `shared/`.
-- `ls node_modules/@watchparty` shows `shared` (it's a link to your `shared/` folder).
-- `server/package.json` contains no `express`, `socket.io` or `nodemon`:
-  `grep -E "express|socket.io|nodemon" server/package.json` prints nothing.
+- `ls node_modules/@watchparty` shows `shared` (a link to your `shared/` folder).
+- `grep -E "express|socket.io|nodemon" server/package.json` prints nothing.
 
 ---
 
-## Part 8: ESLint
+## Part 8: ESLint for server and shared
 
 ### `eslint.config.js` (repository root)
 
 ```js
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
-import reactHooks from 'eslint-plugin-react-hooks';
-import reactRefresh from 'eslint-plugin-react-refresh';
 import globals from 'globals';
 import prettier from 'eslint-config-prettier';
 
 export default tseslint.config(
-  { ignores: ['**/dist', '**/coverage', '**/node_modules', 'docs'] },
+  { ignores: ['client/**', '**/dist', '**/coverage', '**/node_modules', 'docs'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
     files: ['server/**/*.ts', 'shared/**/*.ts', '*.js'],
     languageOptions: { globals: globals.node },
   },
-  {
-    files: ['client/**/*.{ts,tsx}'],
-    languageOptions: { globals: globals.browser },
-    plugins: { 'react-hooks': reactHooks, 'react-refresh': reactRefresh },
-    rules: {
-      ...reactHooks.configs.recommended.rules,
-      'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
-    },
-  },
   prettier,
 );
 ```
 
-Why: one config for the whole repository. `eslint-config-prettier` goes last so ESLint never complains about formatting that Prettier owns.
+Why the root ignores `client/`: the client has its own Next.js ESLint config (Part 6), which registers its own React and TypeScript plugins. Putting both in one file makes ESLint complain about plugins being defined twice. `npm run lint` runs both.
 
 ---
 
@@ -926,11 +1030,16 @@ Replace `README.md` with:
 
 A watch-party app: synced YouTube/Twitch playback, live chat and play-point betting windows.
 
+- `client/` — Next.js frontend on http://localhost:3000
+- `server/` — Node backend (API + WebSockets) on http://localhost:4000
+- `shared/` — types and rules both sides import
+
 ## Docs
 
 - `docs/watchparty_app_project-structure.md` — the design (rules, schema, protocol, file tree)
 - `docs/watchparty_phases.md` — phases, scope and exit criteria
 - `docs/watchparty_execution_plan.md` — step-by-step tasks
+- `docs/guide/` — hands-on guides per step
 
 ## Prerequisites
 
@@ -940,9 +1049,10 @@ Node 22, npm 10, Docker Desktop.
 
 ```bash
 npm install
-cp server/.env.example server/.env   # first time only
-npm run db:up                        # Postgres + Mailpit (UI on http://localhost:8025)
-npm run dev                          # server :3000, client http://localhost:5173
+cp server/.env.example server/.env          # first time only
+cp client/.env.example client/.env.local    # first time only
+npm run db:up                               # Postgres + Mailpit (UI on http://localhost:8025)
+npm run dev                                 # open http://localhost:3000
 ```
 
 ## Checks
@@ -951,6 +1061,7 @@ npm run dev                          # server :3000, client http://localhost:517
 npm run lint
 npm run typecheck
 npm test
+npm run build
 ```
 ````
 
@@ -968,9 +1079,9 @@ npm test
 ```
 
 Expected:
-- `lint`: no errors (a few `react-refresh` warnings are fine).
-- `typecheck`: no output from `shared`, `server` or `client` besides the script headers.
-- `test`: `shared` 1 passed; `server` 3 passed (health ×2, database ×1).
+- `lint`: no errors from either config (warnings are fine).
+- `typecheck`: no errors from `shared`, `server` or `client`.
+- `test`: `shared` 1 passed; `server` 3 passed (health ×2, database ×1). The client has no tests yet.
 
 Then run the app:
 
@@ -978,10 +1089,11 @@ Then run the app:
 npm run dev
 ```
 
-- The terminal shows `WATCHPARTY server listening on http://localhost:3000` (blue) and the Vite URL (magenta).
-- `http://localhost:3000/health` shows `{"ok":true}`.
-- `http://localhost:5173` shows the gold-and-white **WATCHPARTY** logo in Barlow Condensed on the dark background, "Shared package says: WATCHPARTY", and "Server: ok" in green.
-- Stop the server with Ctrl+C: the client page (after a refresh) shows the error in red. Start it again and it returns to "ok".
+- The terminal shows `WATCHPARTY server listening on http://localhost:4000` (blue) and Next.js ready on `http://localhost:3000` (magenta).
+- `http://localhost:4000/health` and `http://localhost:3000/health` both show `{"ok":true}` (the second one through the rewrite).
+- `http://localhost:3000` shows the gold-and-white **WATCHPARTY** logo in Barlow Condensed on the dark background, "Shared package says: WATCHPARTY", and both "Rendered on the server: ok" and "From the browser (through the rewrite): ok" in green.
+- View the page source (Ctrl+U): "Rendered on the server: ok" is already in the HTML; the browser line says "checking…" there, because it's filled in after the page loads.
+- Stop only the server (Ctrl+C stops both; instead run `npm run dev -w client` alone): refresh the page and both lines show an error in red. Start everything again with `npm run dev` and both return to "ok".
 - Break the config on purpose: set `PORT=abc` in `server/.env`, run `npm run dev -w server`, and confirm it exits with `Invalid server/.env: PORT: ...`. Put it back.
 
 Finally, the production build:
@@ -991,24 +1103,24 @@ npm run build
 ```
 
 - `server/dist/index.js` exists (one file, with `shared` bundled in).
-- `client/dist/` contains `index.html` and `assets/`.
+- `client/.next/` exists and the Next.js build output lists `/` as a dynamic route (`ƒ`).
 
 ### Step 0 checklist
 
 - [ ] `npm install` at the root installs every workspace
 - [ ] `npm run db:up` starts Postgres and Mailpit; Mailpit UI loads on `:8025`
-- [ ] `npm run dev` serves `/health` on `:3000` and the themed placeholder on `:5173` showing "Server: ok"
+- [ ] `npm run dev` serves `/health` on `:4000` and the themed page on `:3000` with both checks "ok"
 - [ ] `npm test` passes (shared 1, server 3, including the database test)
 - [ ] `npm run lint` and `npm run typecheck` pass
-- [ ] `npm run build` produces `server/dist/index.js` and `client/dist/`
+- [ ] `npm run build` produces `server/dist/index.js` and `client/.next/`
 - [ ] `server/package.json` has no `express`, `socket.io` or `nodemon`
 
 ### Commit
 
 ```bash
 git add -A
-git status          # make sure server/.env is NOT listed
-git commit -m "Set up workspaces, TypeScript, Docker, Vite, Vitest and ESLint"
+git status          # make sure server/.env and client/.env.local are NOT listed
+git commit -m "Set up workspaces, TypeScript, Docker, Next.js, Vitest and ESLint"
 ```
 
 ---
@@ -1022,9 +1134,14 @@ git commit -m "Set up workspaces, TypeScript, Docker, Vite, Vitest and ESLint"
 | The database test fails with `P1001: Can't reach database server` | Postgres isn't running or isn't healthy yet: `docker compose ps`, wait for `healthy`, rerun `npm test`. |
 | `npm run dev -w server` fails with `Invalid server/.env` | A value is missing or malformed; the message names the key. Compare with `server/.env.example`. |
 | `node: bad option: --env-file` | Node is older than 20.6. Check `node -v`; install Node 22. |
-| Client shows "Server: Unexpected token '<'…" | The request didn't reach the server: the server isn't running, or `vite.config.ts` lacks the `/health` proxy. |
-| `Cannot find module '@watchparty/shared'` | Run `npm install` from the **root**, not inside a workspace. Check `ls node_modules/@watchparty`. |
-| TypeScript error in `client` about `@watchparty/shared` | Make sure `shared/package.json` has `"exports": { ".": "./src/index.ts" }` and `shared/src/index.ts` exists. |
-| ESLint: "Cannot find package 'typescript-eslint'" | Install it at the root (`npm install -D typescript-eslint` without `-w`). |
+| `create-next-app` fails with `unknown option` | Flag names differ between versions. Remove the flag it names and answer the matching question (TypeScript yes, ESLint yes, Tailwind no, `src/` yes, App Router yes, React Compiler no, alias `@/*`). |
+| Next.js warns about multiple lockfiles, or picks the wrong workspace root | A `client/package-lock.json` exists. Delete it (and `client/node_modules`), then `npm install` from the root. |
+| `Module not found: Can't resolve '@watchparty/shared'` in Next.js | Run `npm install` from the root and check `ls node_modules/@watchparty`. Make sure `transpilePackages` is in `next.config.ts`. If it still fails, add `turbopack: { root: path.join(__dirname, '..') }` to `next.config.ts` (with `import path from 'node:path'`) so Next.js looks at the whole repository. |
+| "Rendered on the server: fetch failed" (or `ECONNREFUSED`) | The server isn't running on 4000, or `client/.env.local` is missing / has the wrong `INTERNAL_API_URL`. Restart `npm run dev` after editing `.env.local`. |
+| "From the browser: Unexpected token '<'…" | The browser got an HTML page instead of JSON: the `/health` rewrite is missing from `next.config.ts`, or the server isn't running. |
+| Build error: "You're importing a component that needs server-only" | A client component (`'use client'`) imports `lib/server/api.ts`. Only server components may import it. |
+| Fonts fail to load / `next/font` download error | `next/font` needs internet the first time it fetches the fonts. Connect and restart `npm run dev`. |
+| `client/.env.example` doesn't show up in `git status` | The generated `client/.gitignore` ignores `.env*`; add `!.env.example` below that line. |
+| `Cannot find module '@watchparty/shared'` in the server | Run `npm install` from the **root**, not inside a workspace. |
+| ESLint: "Cannot redefine plugin" | The root config is linting `client/`. Make sure `'client/**'` is in the root config's `ignores`. |
 | Every file shows as changed after `npm run format` | Line endings. Make sure `.gitattributes` is committed, then `git add --renormalize .`. |
-| `npm create vite` created files in the wrong place | It must be run from the root with `client` as the name; the `client/` folder must be empty. |

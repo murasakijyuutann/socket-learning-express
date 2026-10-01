@@ -84,11 +84,11 @@ A step is done when all of these are true:
 - Root npm workspaces: `client`, `server`, `shared`.
 - `tsconfig.base.json` in strict mode; each workspace extends it.
 - `docker-compose.yml`: Postgres 16 (dev and test databases) and Mailpit.
-- `server/`: TypeScript, `tsx` for dev, Prisma initialised, `config.ts` validating `.env` with zod, Vitest. The old Express, Socket.IO and nodemon dependencies are removed.
-- `client/`: Vite + React + TypeScript, React Router, Zustand, dev proxy for `/auth`, `/health` and `/ws`.
+- `server/`: TypeScript, `tsx` for dev, Prisma initialised, `config.ts` validating `.env` with zod, Vitest, listening on `:4000`. The old Express, Socket.IO and nodemon dependencies are removed.
+- `client/`: Next.js (App Router, `src/`, TypeScript) on `:3000`, Zustand, `transpilePackages` for `@watchparty/shared`, rewrites for `/auth/*`, `/api/*` and `/health` to the server.
 - `shared/`: package `@watchparty/shared`, consumed as TypeScript source by both sides.
-- ESLint + Prettier across all workspaces.
-- Theme tokens (colours and fonts from the theme sample) as CSS variables.
+- ESLint + Prettier across all workspaces (the Next.js ESLint config inside `client/`).
+- Theme tokens (colours from the theme sample) as CSS variables; fonts through `next/font`.
 - Root scripts: `dev`, `build`, `test`, `lint`, `typecheck`, `db:up`, `db:migrate`, `db:reset`, `db:seed`.
 - README rewritten for the new setup.
 
@@ -99,8 +99,9 @@ A step is done when all of these are true:
 **Exit criteria**
 - `npm install` at the root installs every workspace.
 - `npm run db:up` starts Postgres and Mailpit; Mailpit's UI loads on `http://localhost:8025`.
-- `npm run dev` starts the server on `:3000` (responds to `GET /health`) and the client on `:5173` (renders a placeholder page in the theme fonts and colours).
-- The client can call `/health` through the Vite proxy.
+- `npm run dev` starts the server on `:4000` (responds to `GET /health`) and Next.js on `:3000` (renders a placeholder page in the theme fonts and colours).
+- The placeholder proves both paths to the server: a server component fetches `INTERNAL_API_URL/health` while rendering, and a client component fetches `/health` through the Next.js rewrite.
+- `npm run build` builds both `server/dist/` and the Next.js app.
 - `npm test` runs one server test and one shared test, both passing, with the server test connecting to the test database.
 - `npm run lint` and `npm run typecheck` pass.
 - `server/package.json` no longer lists `express`, `socket.io` or `nodemon`.
@@ -116,7 +117,7 @@ A step is done when all of these are true:
 - Every client message is `{ action, requestId, payload }`; every reply echoes `requestId`; errors use `{ type: "error", requestId, code, message }`.
 - `room:join` adds the socket to the room first, then builds the snapshot.
 - Chat feature: `chat:send`, a 100-message ring buffer per room with a room `seq`, 300-character limit, 5 messages per 5 seconds.
-- Client: `socket.ts` (connect, reconnect with backoff, typed `send`/`on`, request matching), a bare room page with the chat panel.
+- Client: `socket.ts` (connect directly to `NEXT_PUBLIC_WS_URL`, reconnect with backoff, typed `send`/`on`, request matching), `<ClientProviders>` creating the stores per request, and a bare `/rooms/[roomId]` page with the chat panel (a client component; no server-side data yet).
 
 **Temporary dev identity:** in development only, the upgrade accepts `?dev=<name>` instead of a ticket. It's removed in step 2; a test asserts it's rejected when `NODE_ENV` isn't `development`.
 
@@ -148,7 +149,10 @@ A step is done when all of these are true:
 - `/auth/ws-ticket`: session + verified email → single-use 30-second ticket; the upgrade redeems it atomically. The dev identity is removed.
 - Admin seed (`prisma/seed.ts`) creating the "Admin" account from `.env`.
 - Profiles feature: room snapshot includes display profiles; `<Nickname>`; `admin:rename_user` with `NicknameChange` logging and `user:profile_updated`.
-- Client pages: Register, Verify gate, Verify email landing, Login, Logout, Find ID, Reset password.
+- `GET /auth/me` (user, verified flag, role, config such as `twitchParentDomains`).
+- Client pages: `/register`, `/verify` (gate), `/verify-email` (link landing), `/login`, logout, `/find-id`, `/reset-password`.
+- Route protection: `proxy.ts` redirects to `/login` when there's no `wp_session` cookie on a protected path; the `(app)` server layout calls `/auth/me` through `lib/server/api.ts` (cookie forwarded) and redirects to `/login` or `/verify`; the `admin` layout requires role `ADMIN`.
+- The socket fetches a ticket from `/auth/ws-ticket` before every connect.
 
 **Out of scope:** points (no grant until step 5), rooms in the database.
 
@@ -164,6 +168,8 @@ A step is done when all of these are true:
 - A Tor exit IP (from a fixture list) is refused at sign-up, login and ticket.
 - The admin renames a user; every open client, and old chat messages, show the new name. The rename is logged.
 - The dev identity no longer works.
+- Opening `/` without a cookie redirects to `/login` before any page renders; with an expired or forged cookie the `(app)` layout redirects to `/login`; an unverified user is sent to `/verify`; a non-admin opening `/admin/...` gets a 404.
+- The Next.js server never queries the database: every page's data comes from `server/` over HTTP.
 
 **Tests:** availability rules, collision timing (both fail; first wins), `formToken` replay, verification and grant-free state, session sliding and expiry, ticket single use, Origin check, cleanup job, rename propagation.
 
@@ -173,14 +179,15 @@ A step is done when all of these are true:
 
 **Scope**
 - Schema: `Room` with all playback columns (used from step 4).
-- `room:create` / `room:update` (admin only); `room:list` for everyone, sent over the socket before joining; `room:join` checks the room exists.
+- `room:create` / `room:update` (admin only, over the socket); `GET /api/rooms` and `GET /api/rooms/:id` (session required) for server rendering; `room:join` checks the room exists.
 - `room:presence { watching }`: unique users per room, sent on join and leave, at most once every 2 seconds.
 - Reconnect: on reconnect the client fetches a new ticket, rejoins the last room, applies the snapshot, and drops any event older than what it holds (chat `seq`, later `playbackVersion`, `window.version`, `ledgerTxId`).
-- Client: room list, room page layout (player area, rail, chat), admin "Rooms & playback" page (create room part only).
+- Client: `/` room list (server component from `GET /api/rooms`), `/rooms/[roomId]` (server component renders the shell from `GET /api/rooms/:id`, then `<RoomClient>` joins over the socket), admin "Rooms & playback" page (create room part only; the list refreshes with `router.refresh()` after a create).
 
 **Exit criteria**
 - Only the admin can create or edit a room; a user attempt gets `FORBIDDEN`.
-- Joining a room that doesn't exist gets `NOT_FOUND`.
+- Joining a room that doesn't exist gets `NOT_FOUND`; opening `/rooms/<unknown id>` renders the Next.js 404 page.
+- The room list and the room name are in the server-rendered HTML (visible with JavaScript disabled); chat and presence arrive over the socket.
 - The watching count counts two tabs of the same user once and updates within 2 seconds of a join or leave.
 - Killing and restarting the server while clients are connected: every client reconnects, rejoins its room and shows chat without duplicates or gaps (up to the 100-message buffer, which is lost on restart by design).
 
@@ -192,7 +199,7 @@ A step is done when all of these are true:
 
 **Scope**
 - `playback:load/play/pause/seek` (admin only), stored on `Room` with `playbackVersion`; `playback:state` broadcast; playback state in the room snapshot.
-- Client player with adapters: YouTube IFrame API first, then Twitch embed (with `parent` from `TWITCH_PARENT_DOMAINS`).
+- Client player with adapters, loaded with `next/dynamic` and `ssr: false`: YouTube IFrame API first, then Twitch embed (with `parent` from `twitchParentDomains` in `/auth/me`, which comes from `TWITCH_PARENT_DOMAINS`).
 - VOD sync: expected position = `positionSec + (serverNow − positionUpdatedAt)` while playing; check every 3 seconds; seek if more than 1.5 seconds off. Live: no position sync.
 - Server clock offset on the client (`server-clock.ts`).
 - Admin playback controls (play for everyone, ±10 s, load a different video); "In sync with Admin" and source badges.
@@ -227,7 +234,7 @@ A verified user opens the site, joins the admin's room, watches a synced video a
 - Accounts: `USER:<id>` (cached balance), `HOUSE`, `ESCROW:<ref>`, `SHOP` (computed from entries).
 - Sign-up grant: 5,000 `HOUSE → USER` on first verification (hooked into step 2's verify flow).
 - Daily lucky box: `DailyUse` `LUCKY_BOX` per Tokyo day, `crypto.randomInt(10, 10001)`, `HOUSE → USER`. Header chip and pop-up.
-- `balance:updated` with `ledgerTxId`; balance in the snapshot.
+- `balance:updated` with `ledgerTxId`; balance in the snapshot; `/auth/me` gains `balance`, `ledgerTxId` and the lucky box state so the header is server-rendered with the right numbers.
 - `scripts/reconcile.ts`, also run at the end of the test suite.
 
 **Exit criteria**
@@ -236,7 +243,7 @@ A verified user opens the site, joins the admin's room, watches a synced video a
 - Crossing debits between two users in parallel never deadlock (or recover through retry) and never leave a balance wrong.
 - A checked debit that would go below 0 fails and rolls back the whole transaction.
 - `reconcile.ts` reports every cached balance equal to its ledger sum.
-- The balance in the header updates live and never moves backwards on reconnect.
+- The balance in the header is correct in the server-rendered HTML, updates live, and never moves backwards on reconnect or when a page's server data is older than a socket update.
 
 **Tests:** ledger sum-to-zero, idempotent `(reason, refId)`, checked versus forced debit, lock order under parallel load, Tokyo day boundary for the lucky box, reconciliation.
 
