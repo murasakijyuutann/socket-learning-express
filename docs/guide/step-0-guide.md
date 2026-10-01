@@ -1023,47 +1023,10 @@ Why the root ignores `client/`: the client has its own Next.js ESLint config (Pa
 
 ## Part 9: README
 
-Replace `README.md` with:
+`README.md` already describes the new stack, the docs and the run commands. Once Part 10 passes, make two small edits:
 
-````markdown
-# Watch party
-
-A watch-party app: synced YouTube/Twitch playback, live chat and play-point betting windows.
-
-- `client/` — Next.js frontend on http://localhost:3000
-- `server/` — Node backend (API + WebSockets) on http://localhost:4000
-- `shared/` — types and rules both sides import
-
-## Docs
-
-- `docs/watchparty_app_project-structure.md` — the design (rules, schema, protocol, file tree)
-- `docs/watchparty_phases.md` — phases, scope and exit criteria
-- `docs/watchparty_execution_plan.md` — step-by-step tasks
-- `docs/guide/` — hands-on guides per step
-
-## Prerequisites
-
-Node 22, npm 10, Docker Desktop.
-
-## Run it
-
-```bash
-npm install
-cp server/.env.example server/.env          # first time only
-cp client/.env.example client/.env.local    # first time only
-npm run db:up                               # Postgres + Mailpit (UI on http://localhost:8025)
-npm run dev                                 # open http://localhost:3000
-```
-
-## Checks
-
-```bash
-npm run lint
-npm run typecheck
-npm test
-npm run build
-```
-````
+- In **Status**, replace the "Next up is step 0" sentence with "Step 0 (dev setup) is done; next up is step 1 (WebSocket core and chat)."
+- Rename the heading **Running (once step 0 is done)** to **Running**.
 
 ---
 
