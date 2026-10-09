@@ -13,10 +13,52 @@ A hands-on walkthrough of step 0 from [`watchparty_execution_plan.md`](../watchp
 ## Before you start
 
 - [ ] Node 22 (`node -v` → `v22.x`) and npm 10 (`npm -v`).
-- [ ] Docker Desktop is running (`docker ps` works without an error).
+- [ ] Docker Desktop is running (`docker ps` works without an error). Read the next section: it has to **stay** running.
 - [ ] Nothing is using ports 3000, 4000, 5432, 1025, 8025, 8026, 80 or 443. Check with `netstat -ano | grep -E ":(3000|4000|5432|1025|8025|8026|80|443) "`; no output means they're free. A locally installed PostgreSQL service often holds 5432; stop it in Services, or see Troubleshooting.
 - [ ] Internet access the first time you run the client (`next/font` downloads the fonts once and then serves them itself).
 - [ ] Create a branch: `git checkout -b step-0-dev-setup`.
+
+## ⚠️ Important: keep Docker Desktop running
+
+**Docker Desktop must be open and running the whole time you work on this project**, not just when you type a `docker` command. Postgres and Mailpit live in Docker containers, so when Docker Desktop is closed (or still starting, or its engine is paused), everything that needs them fails:
+
+| Needs Docker running | What breaks without it |
+|---|---|
+| `npm run db:up` / `db:down`, any `docker compose …` | `error during connect` / `Cannot connect to the Docker daemon` |
+| `npm test` | the database test fails with Prisma `P1001: Can't reach database server` |
+| `npm run db:migrate`, `db:reset`, `db:seed` (from step 2) | same `P1001` error |
+| `npm run dev` (from step 2, when the server uses the database) | server errors on every request that touches the database |
+| Container health checks (`docker compose ps`) | nothing to check; the command itself fails |
+| `npm run prod:up` / `prod:down` / `prod:logs` | `Cannot connect to the Docker daemon` |
+
+Closing Docker Desktop's window is fine; it keeps running in the system tray (whale icon). **Quitting** it from the tray stops every container. After a reboot, start Docker Desktop and wait until it says "Engine running" before running anything. Containers come back on their own only if Docker Desktop is set to start at login (Settings → General → "Start Docker Desktop when you sign in").
+
+### Is Docker up? Basic commands
+
+```bash
+docker version             # shows both "Client" and "Server" sections when the engine is running;
+                           #   only "Client" plus an error means Docker Desktop isn't running
+docker info                # engine details; errors if the engine is down
+docker ps                  # running containers (an empty table is fine; an error is not)
+docker compose ps          # this project's dev containers (postgres, mailpit) and their health
+docker compose logs -f postgres   # follow Postgres's log (Ctrl+C to stop following)
+```
+
+What a healthy dev setup looks like in `docker compose ps`:
+
+```
+NAME                        SERVICE    STATUS                    PORTS
+socket-learning-mailpit-1   mailpit    Up 2 minutes (healthy)    0.0.0.0:1025->1025/tcp, 0.0.0.0:8025->8025/tcp
+socket-learning-postgres-1  postgres   Up 2 minutes (healthy)    0.0.0.0:5432->5432/tcp
+```
+
+(Names and timings will differ. Mailpit may show `Up` without `(healthy)`; what matters is that Postgres says `(healthy)`.)
+
+Quick fixes:
+- `docker version` shows no Server section → start Docker Desktop and wait for "Engine running" (whale icon stops animating).
+- `docker compose ps` lists nothing → the containers are stopped: `npm run db:up`.
+- Postgres shows `(health: starting)` → wait 10–20 seconds and check again.
+- Postgres shows `Exited` or `(unhealthy)` → `docker compose logs postgres` to see why (often port 5432 is taken; see Troubleshooting).
 
 ## How the pieces fit
 
@@ -255,6 +297,8 @@ CREATE DATABASE watchparty_test OWNER watchparty;
 Why: Postgres runs scripts in `/docker-entrypoint-initdb.d/` only the **first** time the data volume is created. This one adds the separate test database that `npm test` uses, so tests never touch your dev data.
 
 ### Start it
+
+> **Docker Desktop must be running** (see "Important: keep Docker Desktop running" at the top). Check with `docker version`: you need a **Server** section.
 
 ```bash
 docker compose up -d
@@ -1128,6 +1172,8 @@ Why the root ignores `client/`: the client has its own Next.js ESLint config (Pa
 
 Run each check. All of them should pass.
 
+> **Docker Desktop must be running and Postgres healthy** before `npm test`, or the database test fails with `P1001`. Check with `docker compose ps` (Postgres shows `(healthy)`); if it's not listed, run `npm run db:up`.
+
 ```bash
 npm run format        # formats everything once; review the diff if it's large
 npm run lint
@@ -1455,6 +1501,8 @@ Why:
 
 ### Run the rehearsal
 
+> **Docker Desktop must be running** (see "Important: keep Docker Desktop running" at the top). Check with `docker version`: you need a **Server** section.
+
 ```bash
 npm run prod:up
 ```
@@ -1516,6 +1564,7 @@ git commit -m "Set up workspaces, TypeScript, Docker, Next.js, Vitest, ESLint an
 
 | Symptom | Cause and fix |
 |---|---|
+| `error during connect`, `Cannot connect to the Docker daemon`, or `open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified` | Docker Desktop isn't running (or is still starting). Start it, wait for "Engine running", check with `docker version` (a **Server** section must appear), then `npm run db:up` if `docker compose ps` lists nothing. |
 | `docker compose up` fails with "port is already allocated" on 5432 | A local PostgreSQL service is running. Stop it (Windows Services → `postgresql-x64-…` → Stop), or change the mapping to `'5433:5432'` and use port 5433 in both URLs in `server/.env`. |
 | `watchparty_test` doesn't exist | The volume was created before `init.sql` existed, so the script never ran. Run `docker compose down -v` (this **deletes** the database volume) and `docker compose up -d` again. |
 | The database test fails with `P1001: Can't reach database server` | Postgres isn't running or isn't healthy yet: `docker compose ps`, wait for `healthy`, rerun `npm test`. |
