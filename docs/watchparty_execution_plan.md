@@ -35,6 +35,7 @@ These aren't spelled out in the structure document; they're chosen here so the s
 | Test database | `vitest` global setup runs `prisma migrate reset --force --skip-seed` on `TEST_DATABASE_URL`; DB test files run one at a time | Real Postgres behaviour, no cross-test interference |
 | Health check | `GET /health` → `{ ok: true }` | Lets the proxy and tests confirm the server is up |
 | Room list | `GET /api/rooms`, fetched by a server component | The list is server-rendered; live state stays on the socket |
+| Production | Everything in Docker: `docker-compose.prod.yml` with Caddy, `client` (Next.js standalone), `server`, Postgres; images built from the repo root | One command to deploy; dev and tests stay on the host for fast reloads |
 
 ---
 
@@ -42,7 +43,7 @@ These aren't spelled out in the structure document; they're chosen here so the s
 
 ### Step 0: Dev setup
 
-**Before you start:** Docker Desktop is running. Nothing on ports 3000, 4000, 5432, 1025, 8025.
+**Before you start:** Docker Desktop is running. Nothing on ports 3000, 4000, 5432, 1025, 8025 (and 80/443 for the production rehearsal in 0.9).
 
 A copy-and-paste walkthrough of this step, with every file's contents, is in [`guide/step-0-guide.md`](./guide/step-0-guide.md).
 
@@ -63,6 +64,9 @@ A copy-and-paste walkthrough of this step, with every file's contents, is in [`g
     - `db:migrate`: `npm run db:migrate -w server`
     - `db:reset`: `npm run db:reset -w server`
     - `db:seed`: `npm run db:seed -w server`
+    - `prod:up`: `docker compose -f docker-compose.prod.yml --env-file deploy/production.env up -d --build`
+    - `prod:down`: `docker compose -f docker-compose.prod.yml --env-file deploy/production.env down`
+    - `prod:logs`: `docker compose -f docker-compose.prod.yml --env-file deploy/production.env logs -f`
   - Dev dependencies: `typescript@5`, `concurrently`, `eslint@9`, `@eslint/js`, `typescript-eslint`, `globals`, `prettier`, `eslint-config-prettier`.
   - Check: `npm install` at the root succeeds and creates one root `package-lock.json`.
 - [ ] **0.3 TypeScript base.** `tsconfig.base.json`: `strict`, `target: ES2022`, `module: ESNext`, `moduleResolution: Bundler`, `resolveJsonModule`, `isolatedModules`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `skipLibCheck`, `forceConsistentCasingInFileNames`.
@@ -70,7 +74,7 @@ A copy-and-paste walkthrough of this step, with every file's contents, is in [`g
   - `.gitattributes`: `* text=auto eol=lf`.
   - `.prettierrc`: `{ "singleQuote": true, "semi": true, "trailingComma": "all", "printWidth": 100, "endOfLine": "lf" }`; `.prettierignore` with `dist`, `.next`, `coverage`, `next-env.d.ts`, `*.png`, `*.pdf`, `docs/**/*.html`, `server/prisma/migrations`.
   - `eslint.config.js` (flat config): JS recommended + `typescript-eslint` recommended for `server/` and `shared/`; Node globals; `eslint-config-prettier` last. Ignore `client/` (it has its own config), `dist`, `coverage`, `node_modules`.
-  - `.gitignore`: add `coverage/`, `*.tsbuildinfo`, `.next/`, `next-env.d.ts`.
+  - `.gitignore`: add `coverage/`, `*.tsbuildinfo`, `.next/`, `next-env.d.ts`, `deploy/production.env`.
 - [ ] **0.5 Docker services.**
   - `docker-compose.yml`:
     - `postgres`: `postgres:16`, user/password/db `watchparty`, port `5432`, named volume, `./docker/postgres/init.sql` mounted into `/docker-entrypoint-initdb.d/`.
@@ -108,7 +112,8 @@ A copy-and-paste walkthrough of this step, with every file's contents, is in [`g
   - Scaffold with `npx create-next-app@16 client --ts --app --src-dir --eslint --no-tailwind --no-react-compiler --import-alias "@/*" --use-npm --skip-install --disable-git` (TypeScript, App Router, `src/`, ESLint, no Tailwind, no React Compiler), then remove the demo content and any `client/package-lock.json`, and add `!.env.example` to the generated `client/.gitignore`.
   - Dependencies: `zustand`, `server-only`, `@watchparty/shared` (added by hand as `"*"`).
   - Scripts: `dev: next dev --port 3000`, `build: next build`, `start: next start --port 3000`, `lint: eslint .`, `typecheck: next typegen && tsc --noEmit`.
-  - `client/next.config.ts`: `transpilePackages: ['@watchparty/shared']`; `rewrites()` for `/auth/:path*`, `/api/:path*` and `/health` → `INTERNAL_API_URL`.
+  - `client/next.config.ts`: `transpilePackages: ['@watchparty/shared']`; `rewrites()` for `/auth/:path*`, `/api/:path*` and `/health` → `INTERNAL_API_URL`; `output: 'standalone'`; `outputFileTracingRoot` and `turbopack.root` set to the repository root.
+  - `client/public/.gitkeep` so the folder exists in a fresh clone (the Dockerfile copies it).
   - `client/.env.example` (`INTERNAL_API_URL`, `NEXT_PUBLIC_WS_URL`), copied to `client/.env.local`.
   - `client/eslint.config.mjs`: the generated config plus `eslint-config-prettier` last.
   - `client/src/styles/tokens.css`: CSS variables from the theme sample — `--ground #0D1015`, `--surface #151A21`, `--raised #1C232C`, `--line #2A333F`, `--text #E9EDF2`, `--muted #97A3B3`, `--gold #F4B942`, `--side-a #5B9BFF`, `--side-b #FF9A55`, `--win #3DBE8B`, `--live #D93A40`.
@@ -116,11 +121,20 @@ A copy-and-paste walkthrough of this step, with every file's contents, is in [`g
   - `client/src/app/layout.tsx`: `next/font/google` for the three fonts as CSS variables `--font-display`, `--font-body`, `--font-num`; imports the two stylesheets.
   - `client/src/lib/server/api.ts`: `apiGet(path)` calling `INTERNAL_API_URL` with `cache: 'no-store'` (cookie forwarding is added in step 2).
   - `client/src/app/page.tsx` (server component): "WATCHPARTY" in the display font, `APP_NAME` from `shared`, the server's `/health` fetched while rendering, and `<ClientHealth>` — a client component that fetches `/health` through the rewrite.
-- [ ] **0.9 README.** Replace the old README with: what the project is, prerequisites, the "Dev setup" commands, where the docs are.
+- [ ] **0.9 Docker production stack.** (See "Deployment (Docker)" in the structure document.)
+  - `.dockerignore` (root): `**/node_modules`, `**/.next`, `**/dist`, `**/coverage`, `**/.env`, `**/.env.*` (except `.env.example`), `.git`, `docs`, `deploy/production.env`.
+  - `server/Dockerfile`: `node:22-bookworm-slim` + `openssl`; copy the root and all three workspace `package.json` files + the lockfile, `npm ci -w server`; copy `tsconfig.base.json`, `shared/`, `server/`; `prisma generate`; `npm run build -w server`; `WORKDIR /app/server`, `USER node`, `CMD prisma migrate deploy && node dist/index.js`.
+  - `client/Dockerfile`: build stage as above with `npm ci -w client` and `npm run build -w client` (`INTERNAL_API_URL=http://server:4000`); runtime stage copies `client/.next/standalone`, `client/.next/static` and `client/public`, `HOSTNAME=0.0.0.0`, `USER node`, `CMD node client/server.js`.
+  - `docker-compose.prod.yml`: `postgres` (no published port, volume `pgdata`, health check), `server` (env from `production.env`, `TRUSTED_PROXIES=172.28.0.0/24`, health check on `/health`, waits for Postgres), `client` (`INTERNAL_API_URL=http://server:4000`, waits for a healthy server), `caddy` (`caddy:2`, ports 80/443, `deploy/Caddyfile`, volumes `caddy_data`/`caddy_config`), `mailpit` under profile `local`. Network `internal` with subnet `172.28.0.0/24`.
+  - `deploy/Caddyfile`: `{$SITE_ADDRESS}`; `handle` `/auth/*`, `/api/*`, `/ws`, `/health` → `server:4000`; everything else → `client:3000`.
+  - `deploy/production.env.example`: `SITE_ADDRESS`, `PUBLIC_ORIGIN`, `POSTGRES_*`, SMTP values, `MAIL_FROM`, `TWITCH_PARENT_DOMAINS`, admin values. Copy to `deploy/production.env`.
+  - Check (local rehearsal, `SITE_ADDRESS=http://localhost`, `PUBLIC_ORIGIN=http://localhost`): `npm run prod:up` → `http://localhost` shows both checks "ok"; `docker compose -f docker-compose.prod.yml ps` lists ports only on `caddy`. Stop with `npm run prod:down` before going back to `npm run dev`.
+- [ ] **0.10 README.** Replace the old README with: what the project is, prerequisites, the "Dev setup" commands, the production commands, where the docs are.
 
 **Verify**
 - [ ] `npm install && npm run db:up && npm run dev` → `http://localhost:3000` shows the placeholder with both "Rendered on the server: ok" and "From the browser: ok".
 - [ ] `npm test`, `npm run lint`, `npm run typecheck` and `npm run build` all pass.
+- [ ] `npm run prod:up` (local rehearsal) → `http://localhost` shows both checks "ok"; no `.env` file inside either image.
 - [ ] `grep -E "express|socket.io|nodemon" server/package.json` finds nothing.
 
 ### Step 1: WebSocket core and chat
@@ -168,7 +182,7 @@ A copy-and-paste walkthrough of this step, with every file's contents, is in [`g
 
 - [ ] **2.1 Schema and raw SQL.** Prisma models `User` (no `balance` yet), `Session`, `EmailToken`, `AuthEvent`, `SignupClaim`, `Flag`, `NicknameChange`, with the columns and `onDelete` rules from the structure document. Migration `init_auth`. A second raw SQL migration `ci_unique_login_nickname`: `CREATE UNIQUE INDEX ... ON "User" (lower("loginId"))` and the same for `nickname`. Check: `npm run db:migrate` applies both; `test/setup.ts` now truncates all tables between suites.
 - [ ] **2.2 Shared auth contract.** `shared/src/schemas/signup.ts` (loginId `^[A-Za-z0-9]{4,20}$`, nickname `^[A-Za-z0-9]{2,16}$` and not `admin` in any case, email, password 8+), login, reset, find-id, change-email schemas. New error codes: `LOGIN_ID_TAKEN`, `NICKNAME_TAKEN`, `EMAIL_TAKEN`, `SIGNUP_COLLISION`, `EMAIL_NOT_VERIFIED`, `INVALID_CREDENTIALS`, `TOKEN_INVALID`, `BANNED`, `TOR_BLOCKED`. New limits: sign-up, availability, login, resend, change-email (values from "Protocol limits").
-- [ ] **2.3 HTTP plumbing.** `server/src/http/router.ts`: method + path table, JSON body parser with a 16 KB cap, cookie parse/serialise, JSON responses, error mapping. `server/src/security/origin.ts` applied to every non-GET. `server/src/security/client-ip.ts` (trust `X-Forwarded-For` only when the connection comes from an address in `TRUSTED_PROXIES`; IPv6 → /64). A small in-memory rate limiter keyed by IP or account.
+- [ ] **2.3 HTTP plumbing.** `server/src/http/router.ts`: method + path table, JSON body parser with a 16 KB cap, cookie parse/serialise, JSON responses, error mapping. `server/src/security/origin.ts` applied to every non-GET. `server/src/security/client-ip.ts` (trust `X-Forwarded-For` only when the connection comes from an address in `TRUSTED_PROXIES`, which may list single IPs or CIDR ranges such as the compose subnet; IPv6 → /64). A small in-memory rate limiter keyed by IP or account.
 - [ ] **2.4 Security helpers.** `security/passwords.ts` (argon2id hash/verify), `security/email.ts` (trim, lowercase the domain), `security/tor-list.ts` (fetch the public exit list on start and hourly; `isTor(ip)`; a fixture file for tests), `abuse/flags.ts` (`raiseFlag`), `abuse/signals/shared-ip.ts`.
 - [ ] **2.5 Mail.** `server/src/mail/send.ts` with `nodemailer` SMTP transport; templates for verify, reset and find-ID emails. Check: a test email appears in Mailpit.
 - [ ] **2.6 Availability.** `http/auth/availability.ts`: `GET /auth/availability?field=&value=` → format check → existing account check (case-insensitive for loginId/nickname, exact normalized email) → `{ available }` or `{ invalid, reason }`. Rate-limited per IP. Tests for every rule in "Sign-up and availability checks".

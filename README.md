@@ -19,7 +19,9 @@ The original JavaScript learning servers (raw `ws` and Socket.IO versions) and t
 | Email (dev) | Mailpit (Docker), inbox at http://localhost:8025 |
 | Tests | Vitest, against a real Postgres test database |
 
-How it fits together: the browser loads pages from Next.js, which renders them using data fetched from the server and forwards `/auth/*`, `/api/*` and `/health` to it. The WebSocket connects straight to the server. In production both run on one machine behind a Caddy reverse proxy on one domain.
+How it fits together: the browser loads pages from Next.js, which renders them using data fetched from the server and forwards `/auth/*`, `/api/*` and `/health` to it. The WebSocket connects straight to the server.
+
+In production everything runs in Docker (`docker-compose.prod.yml`). Caddy sits in front on one domain: `/auth/*`, `/api/*`, `/ws` and `/health` go to the server container, and everything else goes to the Next.js container. Daily development and tests run on your machine, with only Postgres and Mailpit in Docker.
 
 ## Docs
 
@@ -49,3 +51,14 @@ npm run typecheck
 npm test
 npm run build
 ```
+
+## Production (Docker)
+
+```bash
+cp deploy/production.env.example deploy/production.env   # first time; set your domain, passwords, SMTP
+npm run prod:up                                          # build images and start Caddy, client, server, Postgres
+npm run prod:logs                                        # follow the logs
+npm run prod:down                                        # stop (the database volume is kept)
+```
+
+With the example values (`SITE_ADDRESS=http://localhost`) this is a local rehearsal on http://localhost. With a real domain, Caddy gets an HTTPS certificate automatically. Details: "Deployment (Docker)" in the structure document.

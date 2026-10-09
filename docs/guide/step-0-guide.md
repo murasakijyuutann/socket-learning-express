@@ -2,7 +2,7 @@
 
 A hands-on walkthrough of step 0 from [`watchparty_execution_plan.md`](../watchparty_execution_plan.md). Follow the parts in order; each one ends with a checkpoint. When every checkpoint passes, step 0 is done.
 
-**What you'll have at the end:** one repository with three packages (`shared`, `server`, `client`) that install, lint, typecheck, test, build and run with one command each, plus Postgres and Mailpit running in Docker. The frontend is a Next.js app on `:3000`; the backend (API and, from step 1, WebSockets) is a Node server on `:4000`.
+**What you'll have at the end:** one repository with three packages (`shared`, `server`, `client`) that install, lint, typecheck, test, build and run with one command each, plus Postgres and Mailpit running in Docker. The frontend is a Next.js app on `:3000`; the backend (API and, from step 1, WebSockets) is a Node server on `:4000`. You'll also have the production stack: the whole app (Caddy, client, server, Postgres) running in Docker with one command. Daily development and tests stay on your machine.
 
 **Time:** about 1–2 hours.
 
@@ -12,7 +12,7 @@ A hands-on walkthrough of step 0 from [`watchparty_execution_plan.md`](../watchp
 
 - [ ] Node 22 (`node -v` → `v22.x`) and npm 10 (`npm -v`).
 - [ ] Docker Desktop is running (`docker ps` works without an error).
-- [ ] Nothing is using ports 3000, 4000, 5432, 1025 or 8025. Check with `netstat -ano | grep -E ":(3000|4000|5432|1025|8025) "`; no output means they're free. A locally installed PostgreSQL service often holds 5432; stop it in Services, or see Troubleshooting.
+- [ ] Nothing is using ports 3000, 4000, 5432, 1025, 8025, 8026, 80 or 443. Check with `netstat -ano | grep -E ":(3000|4000|5432|1025|8025|8026|80|443) "`; no output means they're free. A locally installed PostgreSQL service often holds 5432; stop it in Services, or see Troubleshooting.
 - [ ] Internet access the first time you run the client (`next/font` downloads the fonts once and then serves them itself).
 - [ ] Create a branch: `git checkout -b step-0-dev-setup`.
 
@@ -24,7 +24,9 @@ socket-learning/
 ├── shared/              ← @watchparty/shared: code both sides import, used as TypeScript source (no build step)
 ├── server/              ← Node + TypeScript on :4000 — the only backend (database, auth, WebSockets)
 ├── client/              ← Next.js on :3000 — frontend only (pages; no database, no business rules)
-└── docker-compose.yml   ← Postgres 16 (dev + test databases) and Mailpit (catches emails in dev)
+├── docker-compose.yml   ← dev: Postgres 16 (dev + test databases) and Mailpit (catches emails)
+├── docker-compose.prod.yml ← production: Caddy + client + server + Postgres, all in Docker
+└── deploy/              ← Caddyfile and the production env file
 ```
 
 How a request travels in development:
@@ -79,7 +81,10 @@ Create each file below at the repository root.
     "db:down": "docker compose down",
     "db:migrate": "npm run db:migrate -w server",
     "db:reset": "npm run db:reset -w server",
-    "db:seed": "npm run db:seed -w server"
+    "db:seed": "npm run db:seed -w server",
+    "prod:up": "docker compose -f docker-compose.prod.yml --env-file deploy/production.env up -d --build",
+    "prod:down": "docker compose -f docker-compose.prod.yml --env-file deploy/production.env down",
+    "prod:logs": "docker compose -f docker-compose.prod.yml --env-file deploy/production.env logs -f"
   }
 }
 ```
@@ -174,6 +179,9 @@ build/
 coverage/
 *.tsbuildinfo
 next-env.d.ts
+
+# production secrets (Part 11)
+deploy/production.env
 
 # OS/editor
 .DS_Store
@@ -629,7 +637,10 @@ If it stops with `unknown option` for one of the flags (flag names change betwee
 ```bash
 rm -f client/package-lock.json client/README.md client/src/app/page.module.css client/src/app/globals.css
 rm -rf client/node_modules client/public/*.svg
+touch client/public/.gitkeep
 ```
+
+(The `.gitkeep` keeps the now-empty `public/` folder in git; the client Dockerfile in Part 11 copies it.)
 
 (`client/node_modules` and `client/package-lock.json` only exist if the installer ran anyway; a second lockfile confuses npm workspaces and Next.js.)
 
@@ -683,11 +694,16 @@ cp client/.env.example client/.env.local
 Replace the file with:
 
 ```ts
+import path from 'node:path';
 import type { NextConfig } from 'next';
 
 const apiUrl = process.env.INTERNAL_API_URL ?? 'http://localhost:4000';
+const repoRoot = path.join(__dirname, '..');
 
 const nextConfig: NextConfig = {
+  output: 'standalone',
+  outputFileTracingRoot: repoRoot,
+  turbopack: { root: repoRoot },
   transpilePackages: ['@watchparty/shared'],
   async rewrites() {
     return [
@@ -701,7 +717,7 @@ const nextConfig: NextConfig = {
 export default nextConfig;
 ```
 
-Why: `transpilePackages` makes Next.js compile `@watchparty/shared` from its TypeScript source. The rewrites forward those paths to the server, so the browser only ever talks to `:3000` (cookies in step 2 stay same-origin). The client never defines its own `app/api` routes; `/api/*` always belongs to the server.
+Why: `transpilePackages` makes Next.js compile `@watchparty/shared` from its TypeScript source. The rewrites forward those paths to the server, so the browser only ever talks to `:3000` (cookies in step 2 stay same-origin). The client never defines its own `app/api` routes; `/api/*` always belongs to the server. `output: 'standalone'` makes `next build` produce a self-contained server (`server.js` plus only the `node_modules` it needs) for the Docker image in Part 11. The two `repoRoot` settings tell Next.js the repository root is one folder up, because `shared/` and the single `node_modules/` live there.
 
 ### `client/eslint.config.mjs`
 
@@ -1023,7 +1039,7 @@ Why the root ignores `client/`: the client has its own Next.js ESLint config (Pa
 
 ## Part 9: README
 
-`README.md` already describes the new stack, the docs and the run commands. Once Part 10 passes, make two small edits:
+`README.md` already describes the new stack, the docs and the run commands. Once Parts 10 and 11 pass, make two small edits:
 
 - In **Status**, replace the "Next up is step 0" sentence with "Step 0 (dev setup) is done; next up is step 1 (WebSocket core and chat)."
 - Rename the heading **Running (once step 0 is done)** to **Running**.
@@ -1067,8 +1083,325 @@ npm run build
 
 - `server/dist/index.js` exists (one file, with `shared` bundled in).
 - `client/.next/` exists and the Next.js build output lists `/` as a dynamic route (`ƒ`).
+- `client/.next/standalone/client/server.js` exists (the standalone output used by the Docker image).
 
-### Step 0 checklist
+---
+
+## Part 11: production stack in Docker
+
+In production everything runs in Docker on one machine. Caddy is the only container with published ports. It sends `/auth/*`, `/api/*`, `/ws` and `/health` to the server and everything else to Next.js, and it handles HTTPS automatically once you give it a real domain. Here you'll build it and run a **local rehearsal** on `http://localhost`.
+
+```
+Browser ──▶ caddy :80/:443 ──┬─ /auth/* /api/* /ws /health ─▶ server:4000 ──▶ postgres
+                             └─ everything else ────────────▶ client:3000 ──▶ server:4000
+```
+
+Inside Docker, containers reach each other by service name (`server`, `postgres`), not `localhost`.
+
+### `.dockerignore` (repository root)
+
+```
+**/node_modules
+**/.next
+**/dist
+**/coverage
+**/.env
+**/.env.*
+!**/.env.example
+**/*.log
+.git
+docs
+deploy/production.env
+```
+
+Why: both images are built with the repository root as the build context (Part 2's single lockfile lives there). This keeps the context small and, more importantly, keeps your `.env` files out of the images. A copied `client/.env.local` would be built into the browser code and point it at `ws://localhost:4000`.
+
+### `server/Dockerfile`
+
+```dockerfile
+FROM node:22-bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY shared/package.json shared/
+COPY server/package.json server/
+COPY client/package.json client/
+RUN npm ci -w server
+
+COPY tsconfig.base.json ./
+COPY shared shared
+COPY server server
+
+WORKDIR /app/server
+RUN npx prisma generate && npm run build
+
+ENV NODE_ENV=production
+USER node
+EXPOSE 4000
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/index.js"]
+```
+
+Why each part:
+- **Package files before source:** Docker caches each step, so `npm ci` only reruns when a `package.json` or the lockfile changes, not on every code edit. All three workspace `package.json` files are copied because `npm ci` checks them against the lockfile, even though only the server's dependencies get installed.
+- **`openssl`:** Prisma needs it and the slim image doesn't include it.
+- **`prisma migrate deploy`:** applies any new migrations every time the container starts. In step 0 there are none, so it just says so.
+- **Plain `node`:** the start script's `--env-file` isn't used here; settings come from the compose file.
+- **`USER node`:** the app doesn't run as root.
+- **Image size:** the image keeps the dev dependencies, because the Prisma CLI (for migrations) and `tsx` (for the admin seed in step 2) are dev dependencies. That's fine for an app this size.
+
+### `client/Dockerfile`
+
+```dockerfile
+FROM node:22-bookworm-slim AS build
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+
+COPY package.json package-lock.json ./
+COPY shared/package.json shared/
+COPY server/package.json server/
+COPY client/package.json client/
+RUN npm ci -w client
+
+COPY tsconfig.base.json ./
+COPY shared shared
+COPY client client
+
+ENV INTERNAL_API_URL=http://server:4000
+RUN npm run build -w client
+
+FROM node:22-bookworm-slim
+WORKDIR /app
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME=0.0.0.0
+
+COPY --from=build --chown=node:node /app/client/.next/standalone ./
+COPY --from=build --chown=node:node /app/client/.next/static ./client/.next/static
+COPY --from=build --chown=node:node /app/client/public ./client/public
+
+USER node
+EXPOSE 3000
+CMD ["node", "client/server.js"]
+```
+
+Why:
+- **Two stages:** the first builds; the second only copies the standalone output, so the final image has no build tools and no full `node_modules`. The standalone folder mirrors the repository layout (because of `outputFileTracingRoot`), which is why the entry point is `client/server.js`. Next.js doesn't put `static` and `public` into the standalone folder, so they're copied separately.
+- **`INTERNAL_API_URL` at build time:** Next.js writes the rewrites into the build output, so their target is fixed when the image is built.
+- **`NEXT_PUBLIC_WS_URL`:** deliberately not set, so the browser uses `wss://<same host>/ws` from step 1.
+- **`HOSTNAME=0.0.0.0`:** makes Next.js listen on all of the container's addresses, so Caddy can reach it.
+
+### `deploy/Caddyfile`
+
+```bash
+mkdir -p deploy
+```
+
+```
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	@backend path /auth/* /api/* /ws /health
+	handle @backend {
+		reverse_proxy server:4000
+	}
+
+	handle {
+		reverse_proxy client:3000
+	}
+}
+```
+
+Why: `{$SITE_ADDRESS}` comes from `production.env`. A real domain (`watch.example.com`) makes Caddy fetch an HTTPS certificate automatically; `http://localhost` serves plain HTTP for the rehearsal. `handle` blocks are tried in order and the first match wins, so the backend paths never reach Next.js. Caddy passes WebSocket upgrades through and adds `X-Forwarded-For` on its own.
+
+### `deploy/production.env.example`
+
+```
+# Copy to deploy/production.env (git-ignored) and fill in.
+# The values below are for a local rehearsal on http://localhost.
+
+# Where Caddy listens: a domain (automatic HTTPS) or http://localhost
+SITE_ADDRESS=http://localhost
+# The origin browsers use; https://<domain> on the real server
+PUBLIC_ORIGIN=http://localhost
+
+POSTGRES_USER=watchparty
+POSTGRES_PASSWORD=change-me
+POSTGRES_DB=watchparty
+
+SMTP_HOST=mailpit
+SMTP_PORT=1025
+MAIL_FROM=watchparty@localhost
+
+TWITCH_PARENT_DOMAINS=localhost
+
+ADMIN_LOGIN_ID=
+ADMIN_EMAIL=
+ADMIN_PASSWORD=
+
+# Starts the bundled Mailpit (UI on http://localhost:8026). Remove on the real server.
+COMPOSE_PROFILES=local
+```
+
+```bash
+cp deploy/production.env.example deploy/production.env
+```
+
+On the real server, use a long random `POSTGRES_PASSWORD` with only letters and digits (it goes into a URL, where symbols like `@` or `/` would break it), your SMTP provider's host and port, and your domain in `SITE_ADDRESS`, `PUBLIC_ORIGIN` and `TWITCH_PARENT_DOMAINS`.
+
+### `docker-compose.prod.yml` (repository root)
+
+```yaml
+name: watchparty-prod
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set in deploy/production.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in deploy/production.env}
+      POSTGRES_DB: ${POSTGRES_DB:?set in deploy/production.env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [internal]
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:?set in deploy/production.env}
+      SESSION_TTL_DAYS: 30
+      TRUSTED_PROXIES: 172.28.0.0/24
+      SMTP_HOST: ${SMTP_HOST:?set in deploy/production.env}
+      SMTP_PORT: ${SMTP_PORT:?set in deploy/production.env}
+      MAIL_FROM: ${MAIL_FROM:?set in deploy/production.env}
+      TWITCH_PARENT_DOMAINS: ${TWITCH_PARENT_DOMAINS:?set in deploy/production.env}
+      ADMIN_LOGIN_ID: ${ADMIN_LOGIN_ID:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    networks: [internal]
+
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    restart: unless-stopped
+    environment:
+      INTERNAL_API_URL: http://server:4000
+    depends_on:
+      server:
+        condition: service_healthy
+    networks: [internal]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set in deploy/production.env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - client
+      - server
+    networks: [internal]
+
+  mailpit:
+    image: axllent/mailpit
+    profiles: [local]
+    ports:
+      - '127.0.0.1:8026:8025'
+    networks: [internal]
+
+networks:
+  internal:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+```
+
+Why:
+- **Only Caddy publishes ports.** Postgres, the server and Next.js are reachable only inside the `internal` network. Mailpit's UI is published on `127.0.0.1:8026`, so it doesn't clash with the dev Mailpit on 8025 and isn't reachable from other machines.
+- **`${VAR:?…}`:** compose refuses to start and names the missing variable instead of starting with an empty value. `$$` in the health check is an escaped `$`, so the variable is read inside the container.
+- **Start order:** Postgres healthy → server (migrations, then `/health` healthy) → client → Caddy.
+- **Fixed subnet:** the containers' addresses fall in `172.28.0.0/24`. From step 2, `TRUSTED_PROXIES` uses that range to decide whose `X-Forwarded-For` header (the user's real IP) to believe: Caddy's and the Next.js server's.
+- **`name: watchparty-prod`:** keeps these containers and volumes separate from the dev `docker-compose.yml`, so both can run at the same time.
+
+### Run the rehearsal
+
+```bash
+npm run prod:up
+```
+
+The first build takes a few minutes (dependencies, `next build`, font downloads). Then:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file deploy/production.env ps
+```
+
+**Checkpoint**
+- All five containers are running; `postgres` and `server` show `healthy`.
+- In the `PORTS` column only `caddy` (80, 443) and `mailpit` (`127.0.0.1:8026`) list anything.
+- `http://localhost/health` shows `{"ok":true}` (Caddy → server).
+- `http://localhost` shows the placeholder with both "Rendered on the server: ok" (client container → `server:4000`) and "From the browser (through the rewrite): ok" (browser → Caddy → server).
+- `npm run prod:logs` shows the server's migration message ("No migration found…") and then `WATCHPARTY server listening on http://localhost:4000`. Press Ctrl+C to stop following.
+- No env files in the images:
+
+  ```bash
+  docker compose -f docker-compose.prod.yml --env-file deploy/production.env exec server ls -a
+  docker compose -f docker-compose.prod.yml --env-file deploy/production.env exec client ls -a client
+  ```
+
+  Neither lists `.env` or `.env.local`.
+
+Stop it when you're done:
+
+```bash
+npm run prod:down
+```
+
+(`prod:down` keeps the database volume. `docker compose -f docker-compose.prod.yml --env-file deploy/production.env down -v` deletes it.)
+
+---
+
+
+## Step 0 checklist
 
 - [ ] `npm install` at the root installs every workspace
 - [ ] `npm run db:up` starts Postgres and Mailpit; Mailpit UI loads on `:8025`
@@ -1076,14 +1409,15 @@ npm run build
 - [ ] `npm test` passes (shared 1, server 3, including the database test)
 - [ ] `npm run lint` and `npm run typecheck` pass
 - [ ] `npm run build` produces `server/dist/index.js` and `client/.next/`
+- [ ] `npm run prod:up` (local rehearsal) serves the page on `http://localhost` with both checks "ok"; only Caddy (and the rehearsal Mailpit) publish ports; no `.env` files in the images
 - [ ] `server/package.json` has no `express`, `socket.io` or `nodemon`
 
-### Commit
+## Commit
 
 ```bash
 git add -A
-git status          # make sure server/.env and client/.env.local are NOT listed
-git commit -m "Set up workspaces, TypeScript, Docker, Next.js, Vitest and ESLint"
+git status          # make sure server/.env, client/.env.local and deploy/production.env are NOT listed
+git commit -m "Set up workspaces, TypeScript, Docker, Next.js, Vitest, ESLint and the production stack"
 ```
 
 ---
@@ -1099,7 +1433,7 @@ git commit -m "Set up workspaces, TypeScript, Docker, Next.js, Vitest and ESLint
 | `node: bad option: --env-file` | Node is older than 20.6. Check `node -v`; install Node 22. |
 | `create-next-app` fails with `unknown option` | Flag names differ between versions. Remove the flag it names and answer the matching question (TypeScript yes, ESLint yes, Tailwind no, `src/` yes, App Router yes, React Compiler no, alias `@/*`). |
 | Next.js warns about multiple lockfiles, or picks the wrong workspace root | A `client/package-lock.json` exists. Delete it (and `client/node_modules`), then `npm install` from the root. |
-| `Module not found: Can't resolve '@watchparty/shared'` in Next.js | Run `npm install` from the root and check `ls node_modules/@watchparty`. Make sure `transpilePackages` is in `next.config.ts`. If it still fails, add `turbopack: { root: path.join(__dirname, '..') }` to `next.config.ts` (with `import path from 'node:path'`) so Next.js looks at the whole repository. |
+| `Module not found: Can't resolve '@watchparty/shared'` in Next.js | Run `npm install` from the root and check `ls node_modules/@watchparty`. Make sure `transpilePackages` and `turbopack: { root: repoRoot }` are in `next.config.ts`. |
 | "Rendered on the server: fetch failed" (or `ECONNREFUSED`) | The server isn't running on 4000, or `client/.env.local` is missing / has the wrong `INTERNAL_API_URL`. Restart `npm run dev` after editing `.env.local`. |
 | "From the browser: Unexpected token '<'…" | The browser got an HTML page instead of JSON: the `/health` rewrite is missing from `next.config.ts`, or the server isn't running. |
 | Build error: "You're importing a component that needs server-only" | A client component (`'use client'`) imports `lib/server/api.ts`. Only server components may import it. |
@@ -1108,3 +1442,11 @@ git commit -m "Set up workspaces, TypeScript, Docker, Next.js, Vitest and ESLint
 | `Cannot find module '@watchparty/shared'` in the server | Run `npm install` from the **root**, not inside a workspace. |
 | ESLint: "Cannot redefine plugin" | The root config is linting `client/`. Make sure `'client/**'` is in the root config's `ignores`. |
 | Every file shows as changed after `npm run format` | Line endings. Make sure `.gitattributes` is committed, then `git add --renormalize .`. |
+| `npm run build` fails on Windows with `EPERM: operation not permitted, symlink` | The standalone output copies the `@watchparty/shared` link. Turn on Windows Developer Mode (Settings → System → For developers), which allows symlinks, and build again. The Docker build runs on Linux and isn't affected. |
+| `prod:up`: "Bind for 0.0.0.0:80 failed: port is already allocated" | Something on the host uses port 80 or 443 (IIS, another web server, a VPN client). Stop it, or for the rehearsal change the mappings to `'8080:80'` and use `SITE_ADDRESS=http://localhost:8080` and `PUBLIC_ORIGIN=http://localhost:8080`. |
+| `prod:up`: "required variable … is missing a value" | `deploy/production.env` is missing or lacks that key. Compare with `deploy/production.env.example`. |
+| `prod:up`: "Pool overlaps with other one on this address space" | Another Docker network already uses `172.28.0.0/24`. Pick a different subnet (for example `172.29.0.0/24`) in `docker-compose.prod.yml` and in the server's `TRUSTED_PROXIES`. |
+| The server container restarts in a loop | Check `npm run prod:logs`. `Invalid server/.env` means a compose variable is wrong; a Prisma `P1000`/`P1001` error means the database credentials or the password's characters (use letters and digits only). |
+| Docker build fails at `npm ci` with "lockfile … out of sync" | A `package.json` changed without updating the lockfile. Run `npm install` at the root and commit `package-lock.json`. |
+| Docker build fails at `COPY … client/public` | `client/public/` doesn't exist in this checkout. `touch client/public/.gitkeep` and commit it. |
+| `http://localhost` shows "Rendered on the server: fetch failed" in the rehearsal | The client container can't reach `server:4000`. Check `docker compose … ps` (server healthy?) and that `INTERNAL_API_URL` is `http://server:4000` in both the Dockerfile and the compose file. |

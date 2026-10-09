@@ -89,7 +89,8 @@ A step is done when all of these are true:
 - `shared/`: package `@watchparty/shared`, consumed as TypeScript source by both sides.
 - ESLint + Prettier across all workspaces (the Next.js ESLint config inside `client/`).
 - Theme tokens (colours from the theme sample) as CSS variables; fonts through `next/font`.
-- Root scripts: `dev`, `build`, `test`, `lint`, `typecheck`, `db:up`, `db:migrate`, `db:reset`, `db:seed`.
+- Root scripts: `dev`, `build`, `test`, `lint`, `typecheck`, `db:up`, `db:migrate`, `db:reset`, `db:seed`, `prod:up`, `prod:down`, `prod:logs`.
+- Docker production stack: `server/Dockerfile`, `client/Dockerfile` (Next.js standalone output), `docker-compose.prod.yml` (Caddy, client, server, Postgres; Mailpit under the `local` profile), `deploy/Caddyfile`, `deploy/production.env.example`, `.dockerignore`. Daily development and tests stay on the host.
 - README rewritten for the new setup.
 
 **Out of scope:** any feature code, any database tables.
@@ -105,8 +106,10 @@ A step is done when all of these are true:
 - `npm test` runs one server test and one shared test, both passing, with the server test connecting to the test database.
 - `npm run lint` and `npm run typecheck` pass.
 - `server/package.json` no longer lists `express`, `socket.io` or `nodemon`.
+- `npm run prod:up` with `SITE_ADDRESS=http://localhost` builds both images and starts the stack; `http://localhost` shows the placeholder with both checks "ok", `http://localhost/health` returns `{"ok":true}`, and only Caddy publishes ports (`docker compose ps`).
+- Neither image contains a `.env` file (`docker compose exec client ls -a` / `server ls -a`).
 
-**Risks:** Windows path and line-ending issues (set `.gitattributes` and Prettier `endOfLine: lf`); Docker Desktop not running.
+**Risks:** Windows path and line-ending issues (set `.gitattributes` and Prettier `endOfLine: lf`); Docker Desktop not running; ports 80/443 already in use on the host (IIS, Skype, another web server).
 
 ### Step 1: WebSocket core and chat
 

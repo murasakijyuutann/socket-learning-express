@@ -97,6 +97,12 @@ Superseded (pp. 1, 4, 5; kept for reference only, don't build from them): "Viewe
   - **Ports and routing:** Next.js on `:3000`, `server/` on `:4000`. Dev rewrites `/auth/*`, `/api/*` and `/health`; the WebSocket connects directly. Production: one domain behind a reverse proxy.
   - **Server:** new read-only `/api/*` endpoints and an enriched `GET /auth/me`; `room:list` over the socket is replaced by `GET /api/rooms`; `TRUST_PROXY` becomes `TRUSTED_PROXIES`.
   - **Styling:** unchanged (CSS Modules + theme variables); fonts move from `@fontsource` to `next/font`.
+- 2026-10-10, Docker production stack:
+  - **Production:** runs entirely in Docker with `docker-compose.prod.yml`: Caddy (HTTPS, routing), `client` (Next.js standalone), `server` (runs migrations, then starts), Postgres. Only Caddy publishes ports.
+  - **Development:** unchanged. Node and Next.js run on the host; `docker-compose.yml` still only runs Postgres and Mailpit. Tests run on the host.
+  - **Images:** `server/Dockerfile` and `client/Dockerfile`, both built from the repository root (npm workspaces share one lockfile). `next.config.ts` adds `output: "standalone"` and traces from the repository root.
+  - **Proxy trust:** the compose network has a fixed subnet; `TRUSTED_PROXIES` accepts CIDR ranges and is set to that subnet in production.
+  - **Introduced in:** step 0.
 
 ## Principles
 
@@ -170,11 +176,19 @@ The tree starts from the current repository. `(later)` marks folders that are cr
 socket-learning/
 ├── package.json                      # NEW: npm workspaces ["client", "server", "shared"]
 │                                     #   scripts: dev, build, test, lint, format, typecheck,
-│                                     #   db:up, db:down, db:migrate, db:reset, db:seed
+│                                     #   db:up, db:down, db:migrate, db:reset, db:seed,
+│                                     #   prod:up, prod:down, prod:logs
 ├── package-lock.json                 # moves to the root once workspaces are set up
 ├── tsconfig.base.json                # NEW: strict mode, shared compiler options
-├── docker-compose.yml                # NEW: postgres:16 (dev + test DBs), mailpit
-├── docker/postgres/init.sql          # NEW: creates the watchparty_test database
+├── docker-compose.yml                # NEW: dev only — postgres:16 (dev + test DBs), mailpit
+├── docker-compose.prod.yml           # NEW: production — caddy, client, server, postgres
+│                                     #   (+ mailpit under the "local" profile)
+├── docker/postgres/init.sql          # NEW: creates the watchparty_test database (dev)
+├── deploy/
+│   ├── Caddyfile                     # /auth/* /api/* /ws /health → server:4000,
+│   │                                 #   everything else → client:3000
+│   └── production.env.example        # copy to production.env (git-ignored)
+├── .dockerignore                     # node_modules, .next, dist, .env files, .git, docs
 ├── .gitignore
 ├── README.md                         # how to run: see "Dev setup" below
 │
@@ -234,8 +248,11 @@ socket-learning/
 ├── client/                           # Next.js (App Router) + React + TS — frontend only:
 │   │                                 #   no database, no business rules, no app/api routes
 │   ├── package.json                  # next dev / next build / next start on :3000
+│   ├── Dockerfile                    # build from the repo root → standalone output,
+│   │                                 #   runs `node client/server.js` as user node
 │   ├── next.config.ts                # transpilePackages: ["@watchparty/shared"];
-│   │                                 #   rewrites /auth/*, /api/*, /health → INTERNAL_API_URL
+│   │                                 #   rewrites /auth/*, /api/*, /health → INTERNAL_API_URL;
+│   │                                 #   output: "standalone", traced from the repo root
 │   ├── eslint.config.mjs             # Next.js ESLint config (+ eslint-config-prettier)
 │   ├── .env.example                  # INTERNAL_API_URL, NEXT_PUBLIC_WS_URL
 │   └── src/
@@ -348,6 +365,8 @@ socket-learning/
     ├── package.json                  # Express/Socket.IO dependencies removed
     ├── .env                          # local only, git-ignored
     ├── .env.example                  # see "Dev setup"
+    ├── Dockerfile                    # build from the repo root; prisma generate + tsup;
+    │                                 #   CMD: prisma migrate deploy && node dist/index.js
     ├── vitest.config.ts
     ├── prisma/
     │   ├── schema.prisma
@@ -412,8 +431,8 @@ socket-learning/
         │                             #   (in-memory Map; fine for a single instance)
         ├── security/                 # prevention: things that are blocked
         │   ├── client-ip.ts          # trust X-Forwarded-For only when the direct peer is
-        │   │                         #   in TRUSTED_PROXIES (the reverse proxy and the
-        │   │                         #   Next.js server); IPv6 → /64
+        │   │                         #   in TRUSTED_PROXIES (IPs or CIDR ranges: the reverse
+        │   │                         #   proxy and the Next.js server); IPv6 → /64
         │   ├── origin.ts             # CSRF: state-changing HTTP requests and the ws
         │   │                         #   upgrade must come from an allowed Origin
         │   ├── tor-list.ts           # refreshes the public Tor exit list hourly
@@ -539,7 +558,7 @@ DATABASE_URL=postgresql://watchparty:watchparty@localhost:5432/watchparty
 TEST_DATABASE_URL=postgresql://watchparty:watchparty@localhost:5432/watchparty_test
 ALLOWED_ORIGINS=http://localhost:3000
 SESSION_TTL_DAYS=30
-TRUSTED_PROXIES=127.0.0.1,::1   # peers whose X-Forwarded-For is trusted (Next.js, reverse proxy)
+TRUSTED_PROXIES=127.0.0.1,::1   # IPs or CIDR ranges whose X-Forwarded-For is trusted (Next.js, reverse proxy)
 SMTP_HOST=localhost
 SMTP_PORT=1025              # Mailpit; its web UI is on :8025
 MAIL_FROM=watchparty@localhost
@@ -577,8 +596,30 @@ Next.js is the frontend only. Every rule, every write and every live update live
 | Fonts and styles | `next/font/google` (self-hosted at build time): Barlow Condensed 600, IBM Plex Sans 400/600, JetBrains Mono 600, exposed as `--font-display`, `--font-body`, `--font-num`. CSS Modules plus the theme variables in `styles/tokens.css`. No Tailwind. |
 | Shared code | `@watchparty/shared` is TypeScript source; `next.config.ts` lists it in `transpilePackages`. |
 | Development routing | `next.config.ts` rewrites `/auth/:path*`, `/api/:path*` and `/health` to `INTERNAL_API_URL`, so the browser only talks to `:3000` (cookies are same-origin) except for the WebSocket. `ALLOWED_ORIGINS` is `http://localhost:3000`. |
-| Production routing | One domain behind a reverse proxy (Caddy) on the same machine: `/auth/*`, `/api/*`, `/ws` and `/health` go to `server/` (`:4000`), everything else to `next start` (`:3000`). Cookies stay first-party, the WebSocket is same-origin (`wss://<domain>/ws`), and `ALLOWED_ORIGINS` is `https://<domain>`. The rewrites in `next.config.ts` are unused there because the proxy routes first. |
-| Client IP | Requests reach `server/` through the reverse proxy or the Next.js server, so `client-ip.ts` trusts `X-Forwarded-For` only from peers in `TRUSTED_PROXIES`. |
+| Production routing | One domain behind Caddy, all in Docker (see "Deployment (Docker)"): `/auth/*`, `/api/*`, `/ws` and `/health` go to the `server` container (`:4000`), everything else to the `client` container (`:3000`). Cookies stay first-party, the WebSocket is same-origin (`wss://<domain>/ws`), and `ALLOWED_ORIGINS` is `https://<domain>`. The rewrites in `next.config.ts` are unused there because Caddy routes first. |
+| Client IP | Requests reach `server/` through Caddy or the Next.js server, so `client-ip.ts` trusts `X-Forwarded-For` only from peers in `TRUSTED_PROXIES` (loopback in dev, the compose subnet in production). |
+
+## Deployment (Docker)
+
+Production runs entirely in Docker on one machine; development doesn't (Node and Next.js on the host, Postgres and Mailpit in `docker-compose.yml`, tests on the host).
+
+```
+Internet ──▶ caddy :80/:443 ──┬─ /auth/* /api/* /ws /health ─▶ server:4000 ──▶ postgres:5432
+                              └─ everything else ────────────▶ client:3000 ──▶ server:4000
+              (compose network "internal", subnet 172.28.0.0/24; only caddy publishes ports)
+```
+
+| Piece | Decision |
+|---|---|
+| Compose file | `docker-compose.prod.yml`, project name `watchparty-prod`, variables from `deploy/production.env` (`--env-file`). Root scripts: `prod:up` (build + start), `prod:down`, `prod:logs`. |
+| `server` image | `server/Dockerfile`, built from the repo root: `npm ci -w server`, `prisma generate`, `tsup` build. Starts with `prisma migrate deploy && node dist/index.js` as user `node`. Settings come from the compose `environment`, not a `.env` file. Health check: `GET /health`. The image keeps dev dependencies (Prisma CLI for migrations, `tsx` for `prisma/seed.ts`). |
+| `client` image | `client/Dockerfile`, built from the repo root: `npm ci -w client`, `next build` with `output: "standalone"` and `outputFileTracingRoot` = the repo root; the runtime stage copies `.next/standalone`, `.next/static` and `public`, runs `node client/server.js` as user `node` with `HOSTNAME=0.0.0.0`. `INTERNAL_API_URL=http://server:4000`. `NEXT_PUBLIC_WS_URL` is left empty at build time, so the browser uses same-origin `/ws`. |
+| `caddy` | `caddy:2` with `deploy/Caddyfile`; `SITE_ADDRESS` is the domain (automatic HTTPS) or `http://localhost` for a local rehearsal. Volumes `caddy_data` (certificates) and `caddy_config`. Adds `X-Forwarded-For`. |
+| `postgres` | `postgres:16`, volume `pgdata`, no published port, credentials from `production.env`. Backups: `docker compose exec postgres pg_dump` (scheduling decided at deploy time). |
+| Mail | Real SMTP provider from `production.env`. `mailpit` exists under the `local` profile for rehearsals. |
+| Proxy trust | The compose network has the fixed subnet `172.28.0.0/24`; the server gets `TRUSTED_PROXIES=172.28.0.0/24`. |
+| Secrets | `deploy/production.env` is git-ignored; `deploy/production.env.example` is committed. `.dockerignore` keeps every `.env` file out of the images (a baked `client/.env.local` would point the browser at `ws://localhost:4000`). |
+| Admin seed | `docker compose -f docker-compose.prod.yml --env-file deploy/production.env exec server npx tsx prisma/seed.ts` (from step 2). |
 
 ## Rooms and playback
 
@@ -999,7 +1040,7 @@ Points are free, can't be bought and can't be cashed out, so economy exploits on
 Nothing past phase 2 is built until a watch party and a betting window work end to end. Scope and exit criteria per step are in [`watchparty_phases.md`](./watchparty_phases.md); the ordered tasks are in [`watchparty_execution_plan.md`](./watchparty_execution_plan.md).
 
 **Phase 1: core MVP**
-0. Dev setup: root workspaces, `shared/`, TypeScript, docker-compose, `.env.example` files, the Next.js app with its rewrites, Vitest, ESLint. Remove the old Express/Socket.IO dependencies from `server/`.
+0. Dev setup: root workspaces, `shared/`, TypeScript, docker-compose, `.env.example` files, the Next.js app with its rewrites, Vitest, ESLint, and the Docker production stack (Dockerfiles, `docker-compose.prod.yml`, Caddy). Remove the old Express/Socket.IO dependencies from `server/`.
 1. `ws/` core (upgrade, dispatch with `requestId` echo, the feature registry, snapshot ordering) and chat with room `seq`, using a temporary dev identity. This is a TypeScript port of the earlier `socket-learning` server, reshaped as the first registered feature.
 2. Auth: sign-up with the three availability checks, email verification (Mailpit) with the verify-email gate and 24-hour cleanup, login and cookie sessions, logout, password reset, find ID, CSRF origin checks, `AuthEvent`, the Tor block, the ws ticket, the admin seed, and profiles with `<Nickname>`.
 3. Rooms (admin creates them), `room:presence` and reconnect handling.
