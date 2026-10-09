@@ -8,6 +8,8 @@ A hands-on walkthrough of step 0 from [`watchparty_execution_plan.md`](../watchp
 
 **Shell:** the commands are written for Git Bash. Run every command from the repository root (`d:/Projects/socket-learning`) unless the step says otherwise.
 
+**File paths:** every file below has a **Path:** line with its full location. Create the file exactly there, and create any missing folders on the way. Paths are written with forward slashes; Windows Explorer and VS Code/Cursor accept them. If your repository is somewhere else, replace `D:/Projects/socket-learning/` with your own folder. Create files that start with a dot (`.gitignore`, `.dockerignore`, `.env.example`) from the editor, not Windows Explorer, and check that the editor didn't add `.txt` to the name.
+
 ## Before you start
 
 - [ ] Node 22 (`node -v` → `v22.x`) and npm 10 (`npm -v`).
@@ -64,6 +66,8 @@ Create each file below at the repository root.
 
 ### `package.json`
 
+**Path:** `D:/Projects/socket-learning/package.json`
+
 ```json
 {
   "name": "watchparty",
@@ -93,6 +97,8 @@ Why: `-w server` runs a script inside that workspace; `--workspaces --if-present
 
 ### `tsconfig.base.json`
 
+**Path:** `D:/Projects/socket-learning/tsconfig.base.json`
+
 Used by `shared` and `server`. The client keeps the `tsconfig.json` that Next.js generates.
 
 ```json
@@ -119,6 +125,8 @@ Why: `moduleResolution: "Bundler"` lets you write `import { x } from './file'` w
 
 ### `.gitattributes`
 
+**Path:** `D:/Projects/socket-learning/.gitattributes`
+
 ```
 * text=auto eol=lf
 *.png binary
@@ -129,6 +137,8 @@ Why: `moduleResolution: "Bundler"` lets you write `import { x } from './file'` w
 Why: keeps line endings as LF on Windows so Prettier and Git don't fight over every file.
 
 ### `.prettierrc`
+
+**Path:** `D:/Projects/socket-learning/.prettierrc`
 
 ```json
 {
@@ -141,6 +151,8 @@ Why: keeps line endings as LF on Windows so Prettier and Git don't fight over ev
 ```
 
 ### `.prettierignore`
+
+**Path:** `D:/Projects/socket-learning/.prettierignore`
 
 ```
 node_modules
@@ -157,6 +169,8 @@ docs/**/*.html
 ```
 
 ### `.gitignore`
+
+**Path:** `D:/Projects/socket-learning/.gitignore`
 
 Replace the existing file with:
 
@@ -195,6 +209,8 @@ deploy/production.env
 
 ### `docker-compose.yml`
 
+**Path:** `D:/Projects/socket-learning/docker-compose.yml`
+
 ```yaml
 services:
   postgres:
@@ -225,6 +241,8 @@ volumes:
 ```
 
 ### `docker/postgres/init.sql`
+
+**Path:** `D:/Projects/socket-learning/docker/postgres/init.sql`
 
 ```bash
 mkdir -p docker/postgres
@@ -258,6 +276,8 @@ mkdir -p shared/src
 
 ### `shared/package.json`
 
+**Path:** `D:/Projects/socket-learning/shared/package.json`
+
 ```json
 {
   "name": "@watchparty/shared",
@@ -278,6 +298,8 @@ Why: `exports` points straight at the TypeScript source. Next.js (with `transpil
 
 ### `shared/tsconfig.json`
 
+**Path:** `D:/Projects/socket-learning/shared/tsconfig.json`
+
 ```json
 {
   "extends": "../tsconfig.base.json",
@@ -286,6 +308,8 @@ Why: `exports` points straight at the TypeScript source. Next.js (with `transpil
 ```
 
 ### `shared/src/index.ts`
+
+**Path:** `D:/Projects/socket-learning/shared/src/index.ts`
 
 ```ts
 export const APP_NAME = 'WATCHPARTY';
@@ -296,12 +320,16 @@ export { ERROR_CODES, type ErrorCode } from './errors';
 
 ### `shared/src/limits.ts`
 
+**Path:** `D:/Projects/socket-learning/shared/src/limits.ts`
+
 ```ts
 // Filled in from step 1 onwards (see "Protocol limits" in the structure document).
 export const LIMITS = {} as const;
 ```
 
 ### `shared/src/errors.ts`
+
+**Path:** `D:/Projects/socket-learning/shared/src/errors.ts`
 
 ```ts
 // Filled in from step 1 onwards.
@@ -311,6 +339,8 @@ export type ErrorCode = (typeof ERROR_CODES)[number];
 ```
 
 ### `shared/src/index.test.ts`
+
+**Path:** `D:/Projects/socket-learning/shared/src/index.test.ts`
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -336,6 +366,8 @@ mkdir -p server/src/http server/prisma server/test
 
 ### `server/package.json`
 
+**Path:** `D:/Projects/socket-learning/server/package.json`
+
 ```json
 {
   "name": "server",
@@ -359,6 +391,8 @@ Why: `tsx watch` restarts the server when you save a file. `--env-file` is built
 
 ### `server/tsconfig.json`
 
+**Path:** `D:/Projects/socket-learning/server/tsconfig.json`
+
 ```json
 {
   "extends": "../tsconfig.base.json",
@@ -370,6 +404,8 @@ Why: `tsx watch` restarts the server when you save a file. `--env-file` is built
 ```
 
 ### `server/.env.example`
+
+**Path:** `D:/Projects/socket-learning/server/.env.example`
 
 Overwrite the old file with exactly this:
 
@@ -402,6 +438,8 @@ cp server/.env.example server/.env
 - The admin values can stay empty until step 2. `.env` is git-ignored; `.env.example` is committed.
 
 ### `server/src/config.ts`
+
+**Path:** `D:/Projects/socket-learning/server/src/config.ts`
 
 ```ts
 import { z } from 'zod';
@@ -452,6 +490,8 @@ Why: the server refuses to start with a clear list of what's wrong, instead of c
 
 ### `server/src/http/router.ts`
 
+**Path:** `D:/Projects/socket-learning/server/src/http/router.ts`
+
 ```ts
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
@@ -478,6 +518,8 @@ export async function route(req: IncomingMessage, res: ServerResponse): Promise<
 
 ### `server/src/app.ts`
 
+**Path:** `D:/Projects/socket-learning/server/src/app.ts`
+
 ```ts
 import http from 'node:http';
 import { route } from './http/router';
@@ -496,6 +538,8 @@ export function createServer(): http.Server {
 Why a separate `app.ts`: tests import `createServer()` and listen on a random port, without reading `.env` or taking port 4000. The WebSocket upgrade handler is attached here in step 1.
 
 ### `server/src/index.ts`
+
+**Path:** `D:/Projects/socket-learning/server/src/index.ts`
 
 ```ts
 import { APP_NAME } from '@watchparty/shared';
@@ -520,6 +564,8 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 ### `server/prisma/schema.prisma`
 
+**Path:** `D:/Projects/socket-learning/server/prisma/schema.prisma`
+
 ```prisma
 generator client {
   provider = "prisma-client-js"
@@ -534,6 +580,8 @@ datasource db {
 Write this by hand instead of running `prisma init`: `init` can add an output folder and a config file that the later steps don't expect. There are no models yet, so there's no Prisma client code in step 0; `src/db.ts` and the first models arrive in step 2.
 
 ### `server/vitest.config.ts`
+
+**Path:** `D:/Projects/socket-learning/server/vitest.config.ts`
 
 ```ts
 import { defineConfig } from 'vitest/config';
@@ -551,6 +599,8 @@ Why: `fileParallelism: false` runs test files one at a time. It matters from ste
 
 ### `server/test/setup.ts`
 
+**Path:** `D:/Projects/socket-learning/server/test/setup.ts`
+
 ```ts
 // Loads server/.env so tests can read TEST_DATABASE_URL. Test files never use DATABASE_URL.
 try {
@@ -561,6 +611,8 @@ try {
 ```
 
 ### `server/test/health.test.ts`
+
+**Path:** `D:/Projects/socket-learning/server/test/health.test.ts`
 
 ```ts
 import type { AddressInfo } from 'node:net';
@@ -597,6 +649,8 @@ describe('GET /health', () => {
 ```
 
 ### `server/test/db.test.ts`
+
+**Path:** `D:/Projects/socket-learning/server/test/db.test.ts`
 
 ```ts
 import { execSync } from 'node:child_process';
@@ -644,13 +698,15 @@ touch client/public/.gitkeep
 
 (`client/node_modules` and `client/package-lock.json` only exist if the installer ran anyway; a second lockfile confuses npm workspaces and Next.js.)
 
-Open `client/.gitignore` (generated) and add this line below the `.env*` line, so the example file is committed:
+Open `client/.gitignore` (generated; full path `D:/Projects/socket-learning/client/.gitignore`) and add this line below the `.env*` line, so the example file is committed:
 
 ```
 !.env.example
 ```
 
 ### `client/package.json`
+
+**Path:** `D:/Projects/socket-learning/client/package.json`
 
 Keep the generated `dependencies` and `devDependencies` as they are, and set the name and scripts:
 
@@ -675,6 +731,8 @@ Why `next typegen`: Next.js generates types for routes and page props; `typegen`
 
 ### `client/.env.example`
 
+**Path:** `D:/Projects/socket-learning/client/.env.example`
+
 ```
 INTERNAL_API_URL=http://localhost:4000
 NEXT_PUBLIC_WS_URL=ws://localhost:4000/ws
@@ -690,6 +748,8 @@ cp client/.env.example client/.env.local
 - `NEXT_PUBLIC_WS_URL` is built into the browser code (anything starting with `NEXT_PUBLIC_` is). It's used from step 1; in production it stays empty and the client uses `wss://<same host>/ws`.
 
 ### `client/next.config.ts`
+
+**Path:** `D:/Projects/socket-learning/client/next.config.ts`
 
 Replace the file with:
 
@@ -721,6 +781,8 @@ Why: `transpilePackages` makes Next.js compile `@watchparty/shared` from its Typ
 
 ### `client/eslint.config.mjs`
 
+**Path:** `D:/Projects/socket-learning/client/eslint.config.mjs`
+
 Replace the generated file with the same config plus Prettier's "turn off formatting rules" config at the end:
 
 ```js
@@ -747,6 +809,8 @@ mkdir -p client/src/styles client/src/lib/server
 
 #### `client/src/styles/tokens.css`
 
+**Path:** `D:/Projects/socket-learning/client/src/styles/tokens.css`
+
 ```css
 :root {
   --ground: #0d1015;
@@ -768,6 +832,8 @@ mkdir -p client/src/styles client/src/lib/server
 These come straight from the theme sample mockup. The font variables (`--font-display`, `--font-body`, `--font-num`) are set by `next/font` in the layout.
 
 #### `client/src/styles/global.css`
+
+**Path:** `D:/Projects/socket-learning/client/src/styles/global.css`
 
 ```css
 *,
@@ -807,6 +873,8 @@ input {
 
 ### `client/src/app/layout.tsx`
 
+**Path:** `D:/Projects/socket-learning/client/src/app/layout.tsx`
+
 Replace the file with:
 
 ```tsx
@@ -836,6 +904,8 @@ Why: `next/font/google` downloads the fonts at dev/build time and serves them fr
 
 ### `client/src/lib/server/api.ts`
 
+**Path:** `D:/Projects/socket-learning/client/src/lib/server/api.ts`
+
 ```ts
 import 'server-only';
 
@@ -863,6 +933,8 @@ export async function apiGet<T>(path: string): Promise<ApiResult<T>> {
 Why: this is the one place server components call the backend. `import 'server-only'` makes the build fail if a client component ever imports it. `cache: 'no-store'` because this data is per-user and live; Next.js must never cache it. In step 2 this function starts forwarding the user's cookie.
 
 ### `client/src/app/ClientHealth.tsx`
+
+**Path:** `D:/Projects/socket-learning/client/src/app/ClientHealth.tsx`
 
 ```tsx
 'use client';
@@ -892,6 +964,8 @@ export function ClientHealth() {
 ```
 
 ### `client/src/app/page.tsx`
+
+**Path:** `D:/Projects/socket-learning/client/src/app/page.tsx`
 
 Replace the file with:
 
@@ -929,6 +1003,8 @@ export default async function HomePage() {
 Why two checks: they prove the two ways the frontend reaches the backend. The first line is fetched by the Next.js server while it renders the page (the pattern used for the room list and the header later). The second is fetched by the browser through the rewrite (the pattern used for sign-up and login). `force-dynamic` stops `next build` from trying to pre-render this page while the server isn't running.
 
 ### `client/src/app/page.module.css`
+
+**Path:** `D:/Projects/socket-learning/client/src/app/page.module.css`
 
 ```css
 .page {
@@ -1013,7 +1089,9 @@ Why the pinned majors: Prisma 6 because Prisma 7 changes how the client is gener
 
 ## Part 8: ESLint for server and shared
 
-### `eslint.config.js` (repository root)
+### `eslint.config.js`
+
+**Path:** `D:/Projects/socket-learning/eslint.config.js`
 
 ```js
 import js from '@eslint/js';
@@ -1039,7 +1117,7 @@ Why the root ignores `client/`: the client has its own Next.js ESLint config (Pa
 
 ## Part 9: README
 
-`README.md` already describes the new stack, the docs and the run commands. Once Parts 10 and 11 pass, make two small edits:
+`README.md` (at `D:/Projects/socket-learning/README.md`) already describes the new stack, the docs and the run commands. Once Parts 10 and 11 pass, make two small edits:
 
 - In **Status**, replace the "Next up is step 0" sentence with "Step 0 (dev setup) is done; next up is step 1 (WebSocket core and chat)."
 - Rename the heading **Running (once step 0 is done)** to **Running**.
@@ -1098,7 +1176,9 @@ Browser ──▶ caddy :80/:443 ──┬─ /auth/* /api/* /ws /health ─▶ 
 
 Inside Docker, containers reach each other by service name (`server`, `postgres`), not `localhost`.
 
-### `.dockerignore` (repository root)
+### `.dockerignore`
+
+**Path:** `D:/Projects/socket-learning/.dockerignore`
 
 ```
 **/node_modules
@@ -1117,6 +1197,8 @@ deploy/production.env
 Why: both images are built with the repository root as the build context (Part 2's single lockfile lives there). This keeps the context small and, more importantly, keeps your `.env` files out of the images. A copied `client/.env.local` would be built into the browser code and point it at `ws://localhost:4000`.
 
 ### `server/Dockerfile`
+
+**Path:** `D:/Projects/socket-learning/server/Dockerfile`
 
 ```dockerfile
 FROM node:22-bookworm-slim
@@ -1155,6 +1237,8 @@ Why each part:
 - **Image size:** the image keeps the dev dependencies, because the Prisma CLI (for migrations) and `tsx` (for the admin seed in step 2) are dev dependencies. That's fine for an app this size.
 
 ### `client/Dockerfile`
+
+**Path:** `D:/Projects/socket-learning/client/Dockerfile`
 
 ```dockerfile
 FROM node:22-bookworm-slim AS build
@@ -1195,6 +1279,8 @@ Why:
 
 ### `deploy/Caddyfile`
 
+**Path:** `D:/Projects/socket-learning/deploy/Caddyfile`
+
 ```bash
 mkdir -p deploy
 ```
@@ -1217,6 +1303,8 @@ mkdir -p deploy
 Why: `{$SITE_ADDRESS}` comes from `production.env`. A real domain (`watch.example.com`) makes Caddy fetch an HTTPS certificate automatically; `http://localhost` serves plain HTTP for the rehearsal. `handle` blocks are tried in order and the first match wins, so the backend paths never reach Next.js. Caddy passes WebSocket upgrades through and adds `X-Forwarded-For` on its own.
 
 ### `deploy/production.env.example`
+
+**Path:** `D:/Projects/socket-learning/deploy/production.env.example`
 
 ```
 # Copy to deploy/production.env (git-ignored) and fill in.
@@ -1251,7 +1339,9 @@ cp deploy/production.env.example deploy/production.env
 
 On the real server, use a long random `POSTGRES_PASSWORD` with only letters and digits (it goes into a URL, where symbols like `@` or `/` would break it), your SMTP provider's host and port, and your domain in `SITE_ADDRESS`, `PUBLIC_ORIGIN` and `TWITCH_PARENT_DOMAINS`.
 
-### `docker-compose.prod.yml` (repository root)
+### `docker-compose.prod.yml`
+
+**Path:** `D:/Projects/socket-learning/docker-compose.prod.yml`
 
 ```yaml
 name: watchparty-prod
