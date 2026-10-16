@@ -1,6 +1,6 @@
 # Watch-party platform — project structure
 
-**Stack:** Next.js (App Router) + React + TS (`client/`, frontend only) · Node.js + TS with built-in `http` and the `ws` library (`server/`, the only backend) · PostgreSQL + Prisma · npm workspaces
+**Stack:** Next.js (App Router) + React + TS (`client/`, frontend only) · Node.js + TS with built-in `http` and the `ws` library (`server/`, the only backend) · PostgreSQL + Prisma · npm workspaces · Docker (dev: Postgres and Mailpit; production: Caddy, client, server and Postgres)
 
 **Repository:** `socket-learning/`. This document is the only architecture document. Older docs (the AWS Lambda/DynamoDB setup and the earlier playback-sync map) were removed and are superseded.
 
@@ -94,7 +94,7 @@ Superseded (pp. 1, 4, 5; kept for reference only, don't build from them): "Viewe
   - **Frontend:** `client/` is a Next.js App Router app instead of Vite + React Router. It's frontend only: no route handlers, no server actions, no database access.
   - **Rendering:** server components fetch first data (`/auth/me`, `GET /api/rooms`, `GET /api/rooms/:id`) with the user's cookie; live state still comes only from the socket.
   - **Protection:** `proxy.ts` redirects to `/login` when there's no session cookie; the `(app)` server layout validates the session with `/auth/me` and handles unverified and admin redirects.
-  - **Ports and routing:** Next.js on `:3000`, `server/` on `:4000`. Dev rewrites `/auth/*`, `/api/*` and `/health`; the WebSocket connects directly. Production: one domain behind a reverse proxy.
+  - **Ports and routing:** Next.js on `:3000`, `server/` on `:4000`. Dev rewrites `/auth/*`, `/api/*` and `/health`; the WebSocket connects directly. Production: one domain behind Caddy, all in Docker (see the 2026-10-10 revision).
   - **Server:** new read-only `/api/*` endpoints and an enriched `GET /auth/me`; `room:list` over the socket is replaced by `GET /api/rooms`; `TRUST_PROXY` becomes `TRUSTED_PROXIES`.
   - **Styling:** unchanged (CSS Modules + theme variables); fonts move from `@fontsource` to `next/font`.
 - 2026-10-10, Docker production stack:
@@ -133,7 +133,7 @@ Superseded (pp. 1, 4, 5; kept for reference only, don't build from them): "Viewe
 │ dev: rewrites /auth/*, │             │
 │ /api/* → :4000         │             │
 └───────┬────────────────┘             │
-        │ /auth/* /api/* (rewrites in dev; the reverse proxy in production)
+        │ /auth/* /api/* (rewrites in dev; Caddy in the production Docker stack)
 ┌───────▼──────────────────────────────▼───────┐
 │  server/ — Node.js + TS, one process  :4000  │
 │                                              │
@@ -165,8 +165,12 @@ Superseded (pp. 1, 4, 5; kept for reference only, don't build from them): "Viewe
 └───────────────────┬──────────────────────────┘
 ┌───────────────────▼──────────────────────────┐
 │  PostgreSQL 16 + Prisma                      │
+│  dev: the postgres container (docker-compose)│
+│  prod: the postgres service, no public port  │
 └──────────────────────────────────────────────┘
 ```
+
+**Where Docker sits.** The boxes above are processes, not machines. In development, Node and Next.js run on the host and only Postgres and Mailpit run in Docker (`docker-compose.yml`). In production the whole diagram runs in Docker (`docker-compose.prod.yml`): Caddy is the only published port and routes the browser to the `client` and `server` containers. Details are in [Deployment (Docker)](#deployment-docker).
 
 ## File tree
 
@@ -440,7 +444,8 @@ socket-learning/
         │   └── email.ts              # emailNormalized: trim + lowercase domain
         │                             #   (no Gmail dot/+alias handling)
         ├── mail/
-        │   └── send.ts               # SMTP; Mailpit in dev, provider chosen at deploy time
+        │   └── send.ts               # SMTP; the Mailpit container in dev,
+        │                             #   a real provider in the production Docker stack
         ├── ws/                       # core — no feature logic here
         │   ├── upgrade.ts            # check Origin; redeem ticket atomically
         │   ├── connection.ts         # ping every 30s, drop after 2 missed pongs;
@@ -575,7 +580,7 @@ INTERNAL_API_URL=http://localhost:4000     # used by the Next.js server: rewrite
 NEXT_PUBLIC_WS_URL=ws://localhost:4000/ws  # used by the browser; leave empty in production to use same-origin /ws
 ```
 
-**Tests:** Vitest. The economy and betting tests run against a real Postgres test database, not mocks, because the point of those tests is locking and constraint behaviour. The concurrency tests fire parallel requests, for example 20 bets racing the auto-lock, or two users transferring to each other at the same moment.
+**Tests:** Vitest. The economy and betting tests run against the `watchparty_test` database in the Postgres container, not mocks, because the point of those tests is locking and constraint behaviour. Docker Desktop has to be running. The concurrency tests fire parallel requests, for example 20 bets racing the auto-lock, or two users transferring to each other at the same moment.
 
 **Lint and format:** ESLint + Prettier across all workspaces. `client/` keeps the Next.js ESLint config in its own `eslint.config.mjs`; the root config covers `server/` and `shared/`.
 
@@ -1042,7 +1047,7 @@ Nothing past phase 2 is built until a watch party and a betting window work end 
 **Phase 1: core MVP**
 0. Dev setup: root workspaces, `shared/`, TypeScript, docker-compose, `.env.example` files, the Next.js app with its rewrites, Vitest, ESLint, and the Docker production stack (Dockerfiles, `docker-compose.prod.yml`, Caddy). Remove the old Express/Socket.IO dependencies from `server/`.
 1. `ws/` core (upgrade, dispatch with `requestId` echo, the feature registry, snapshot ordering) and chat with room `seq`, using a temporary dev identity. This is a TypeScript port of the earlier `socket-learning` server, reshaped as the first registered feature.
-2. Auth: sign-up with the three availability checks, email verification (Mailpit) with the verify-email gate and 24-hour cleanup, login and cookie sessions, logout, password reset, find ID, CSRF origin checks, `AuthEvent`, the Tor block, the ws ticket, the admin seed, and profiles with `<Nickname>`.
+2. Auth: sign-up with the three availability checks, email verification (the Mailpit container) with the verify-email gate and 24-hour cleanup, login and cookie sessions, logout, password reset, find ID, CSRF origin checks, `AuthEvent`, the Tor block, the ws ticket, the admin seed, and profiles with `<Nickname>`.
 3. Rooms (admin creates them), `room:presence` and reconnect handling.
 4. Playback: YouTube first, then Twitch.
 

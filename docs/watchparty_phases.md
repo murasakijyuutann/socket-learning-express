@@ -6,7 +6,7 @@ This document defines **what** each phase delivers and **when it's done**. The s
 
 | Phase | Steps | Outcome |
 |---|---|---|
-| 1. Core MVP | 0 Dev setup · 1 WebSocket core and chat · 2 Auth · 3 Rooms, presence, reconnect · 4 Playback | Verified users watch a synced YouTube or Twitch video together and chat |
+| 1. Core MVP | 0 Dev setup (Docker: Postgres + Mailpit, plus the production stack) · 1 WebSocket core and chat · 2 Auth · 3 Rooms, presence, reconnect · 4 Playback | Verified users watch a synced YouTube or Twitch video together and chat |
 | 2. Centerpiece | 5 Economy · 6 Betting windows | Users get points, bet on admin-run windows, and are paid by the house |
 | 3. Operations | 7 Moderation, reports, flags | The admin can keep the room safe and review abuse flags |
 | 4. Expansion | 8 Transfers · 9 Leaderboard · 10 Shop · 11 Fantasy | Social and long-term features around the economy |
@@ -44,11 +44,11 @@ A step is done when all of these are true:
 
 1. Every exit criterion listed for the step passes.
 2. `npm run lint` and `npm run typecheck` pass with no errors, and `npm test` passes.
-3. New server behaviour has tests. Economy, betting and anything with locking are tested against the real Postgres test database, never mocks.
+3. New server behaviour has tests. Economy, betting and anything with locking are tested against the real Postgres test database (the `watchparty_test` database in the Postgres container), never mocks. Docker Desktop has to be running for `npm test` and every `npm run db:*` command.
 4. Every message the step adds is in `shared/src/messages/` with a zod schema in `shared/src/schemas/`. The client and server both import it from there.
 5. Every error the step can return has a code in `shared/src/errors.ts`, and replies echo the `requestId`.
 6. Every limit the step introduces is in `shared/src/limits.ts`.
-7. The demo scenario for the step runs from a fresh database (`npm run db:reset && npm run db:seed`).
+7. The demo scenario for the step runs from a fresh database (`npm run db:reset && npm run db:seed`) against the Postgres container. Email in the demo is read in the Mailpit container (`http://localhost:8025`).
 8. The structure document is updated if the implementation had to change a rule, a column or a message. Code and doc don't drift.
 
 ### Conventions
@@ -65,10 +65,10 @@ A step is done when all of these are true:
 | Layer | Tool | Used for |
 |---|---|---|
 | Unit | Vitest | Pure functions: odds, payouts, schemas, ring buffer, countdown helpers |
-| Integration (DB) | Vitest + test Postgres | Ledger, locks, constraints, auth flows, settlement, void |
+| Integration (DB) | Vitest + the Postgres container (`watchparty_test` from `docker-compose.yml`) | Ledger, locks, constraints, auth flows, settlement, void |
 | Integration (WebSocket) | Vitest + real `ws` clients against a server on a random port | Upgrade, dispatch, snapshot ordering, broadcasts, reconnect |
 | Concurrency | Vitest, parallel promises | Bets racing auto-lock, crossing transfers, double settle, sign-up collisions |
-| Manual demo | Browser + Mailpit | The demo scenario at the end of each step |
+| Manual demo | Browser + the Mailpit container | The demo scenario at the end of each step |
 
 ---
 
@@ -146,7 +146,7 @@ A step is done when all of these are true:
 - Schema: `User` (without `balance`, which arrives in step 5), `Session`, `EmailToken`, `AuthEvent`, `SignupClaim`, `Flag`, `NicknameChange`, plus case-insensitive unique indexes on `loginId` and `nickname`.
 - HTTP router on the built-in `http` module: JSON body parsing with a size cap, cookies, Origin check on every state-changing request, per-IP and per-account rate limits.
 - Sign-up with three availability checks, the 1-second collision rule and `formToken` replay.
-- Email verification through Mailpit, the verify-email gate, resend, change email, and the 24-hour unverified-account cleanup.
+- Email verification through the Mailpit container (`http://localhost:8025`), the verify-email gate, resend, change email, and the 24-hour unverified-account cleanup.
 - Login with cookie sessions (30-day sliding), logout, password reset (deletes all sessions), find ID.
 - `AuthEvent` recording with client IP (IPv6 as /64); shared-IP flag at sign-up; Tor exit list block at sign-up, login and ticket.
 - `/auth/ws-ticket`: session + verified email → single-use 30-second ticket; the upgrade redeems it atomically. The dev identity is removed.

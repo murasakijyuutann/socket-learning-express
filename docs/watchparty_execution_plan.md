@@ -13,7 +13,7 @@ Paths are relative to the repository root. `[ ]` boxes are meant to be ticked in
 
 - `server/` holds only the old `package.json` (Express, Socket.IO, `ws`, nodemon), `package-lock.json`, `.env`, `.env.example` and `node_modules/`. The old JavaScript server was deleted in commit `33cffe6`; for the TypeScript port in step 1, read it from the commit before: `git show 42ab038:server/index.js` (also `roomService.js`, `broadcast.js`, `test-client.js`).
 - `client/` is empty.
-- Tooling on the dev machine: Node 22.16, npm 10.9, Docker 28.
+- Tooling on the dev machine: Node 22.16, npm 10.9, Docker Desktop 28. Docker Desktop has to stay running: Postgres and Mailpit are containers (`docker-compose.yml`), tests hit that Postgres, and production is the separate stack in `docker-compose.prod.yml` (task 0.9).
 
 ## Decisions this plan makes
 
@@ -30,10 +30,10 @@ These aren't spelled out in the structure document; they're chosen here so the s
 | Styling | CSS Modules plus global CSS variables for the theme tokens | No extra framework; tokens map 1:1 to the theme sample |
 | Fonts | `next/font/google` (Barlow Condensed 600, IBM Plex Sans 400/600, JetBrains Mono 600) | Self-hosted at build time; no third-party font requests at runtime |
 | Client state | Zustand vanilla stores created inside `<ClientProviders>` per request | Module-level stores would be shared between users on the Next.js server |
-| Email | `nodemailer` over SMTP (Mailpit in dev) | Matches `.env` settings in the structure document |
+| Email | `nodemailer` over SMTP (the Mailpit container in dev, port 1025) | Matches `.env` settings in the structure document |
 | Passwords | `argon2` (argon2id) | As specified |
-| Test database | `vitest` global setup runs `prisma migrate reset --force --skip-seed` on `TEST_DATABASE_URL`; DB test files run one at a time | Real Postgres behaviour, no cross-test interference |
-| Health check | `GET /health` → `{ ok: true }` | Lets the proxy and tests confirm the server is up |
+| Test database | `vitest` global setup runs `prisma migrate reset --force --skip-seed` on `TEST_DATABASE_URL` (the `watchparty_test` database in the Postgres container); DB test files run one at a time | Real Postgres behaviour, no cross-test interference |
+| Health check | `GET /health` → `{ ok: true }` | Lets Caddy, the production container health check and tests confirm the server is up |
 | Room list | `GET /api/rooms`, fetched by a server component | The list is server-rendered; live state stays on the socket |
 | Production | Everything in Docker: `docker-compose.prod.yml` with Caddy, `client` (Next.js standalone), `server`, Postgres; images built from the repo root | One command to deploy; dev and tests stay on the host for fast reloads |
 
@@ -176,7 +176,7 @@ A copy-and-paste walkthrough of this step, with every file's contents, is in [`g
 
 ### Step 2: Auth
 
-**Before you start:** step 1 merged. Mailpit running.
+**Before you start:** step 1 merged. Docker Desktop running, with the dev containers up (`npm run db:up`): Postgres healthy and Mailpit's inbox on `http://localhost:8025`.
 
 **Tasks**
 
