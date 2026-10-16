@@ -1,0 +1,22 @@
+{
+    "name": "watchparty",
+    "private": true,
+    "type": "module",
+    "workspaces": ["shared", "server", "client"],
+    "scripts": {
+        "dev": "concurrently -n server,client -c blue,magenta \"npm run dev -w server\" \"npm run dev -w client\"",
+        "build": "npm run build -w server && npm run build -w client",
+        "test": "npm run test --workspaces --if-present",
+        "lint": "eslint . && npm run lint -w client",
+        "format": "prettier --write .",
+        "typecheck": "npm run typecheck --workspaces --if-present",
+        "db:up": "docker compose up -d",
+        "db:down": "docker compose down",
+        "db:migrate": "npm run db:migrate -w server",
+        "db:reset": "npm run db:reset -w server",
+        "db:seed": "npm run db:seed -w server",
+        "prod:up": "docker compose -f docker-compose.prod.yml --env-file deploy/production.env up -d --build",
+        "prod:down": "docker compose -f docker-compose.prod.yml --env-file deploy/production.env down",
+        "prod:logs": "docker compose -f docker-compose.prod.yml --env-file deploy/production.env logs -f"
+    }
+}
