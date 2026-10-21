@@ -9,9 +9,16 @@ node_modules/
 npm-debug.log*
 *.log
 
-# build output
+# build and test output
 dist/
 build/
+.next/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# production secrets (Part 11)
+deploy/production.env
 
 # OS/editor
 .DS_Store
