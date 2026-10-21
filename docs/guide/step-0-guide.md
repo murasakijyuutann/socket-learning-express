@@ -1,6 +1,6 @@
 # Step 0 guide: dev setup
 
-A hands-on walkthrough of step 0 from [`watchparty_execution_plan.md`](../watchparty_execution_plan.md). Follow the parts in order; each one ends with a checkpoint. When every checkpoint passes, step 0 is done.
+A hands-on walkthrough of step 0 from [`watchparty_execution_plan.md`](../watchparty_execution_plan.md). Follow the parts in order; each one ends with a checkpoint. The [Branches](#branches) section says which branch each part belongs on. When every checkpoint passes, step 0 is done.
 
 **What you'll have at the end:** one repository with three packages (`shared`, `server`, `client`) that install, lint, typecheck, test, build and run with one command each, plus Postgres and Mailpit running in Docker. The frontend is a Next.js app on `:3000`; the backend (API and, from step 1, WebSockets) is a Node server on `:4000`. You'll also have the production stack: the whole app (Caddy, client, server, Postgres) running in Docker with one command. Daily development and tests stay on your machine.
 
@@ -16,7 +16,32 @@ A hands-on walkthrough of step 0 from [`watchparty_execution_plan.md`](../watchp
 - [ ] Docker Desktop is running (`docker ps` works without an error). Read the next section: it has to **stay** running.
 - [ ] Nothing is using ports 3000, 4000, 5432, 1025, 8025, 8026, 80 or 443. Check with `netstat -ano | grep -E ":(3000|4000|5432|1025|8025|8026|80|443) "`; no output means they're free. A locally installed PostgreSQL service often holds 5432; stop it in Services, or see Troubleshooting.
 - [ ] Internet access the first time you run the client (`next/font` downloads the fonts once and then serves them itself).
-- [ ] Create a branch: `git checkout -b step-0-dev-setup`.
+- [ ] You are on `main`, and it is clean (`git status` shows nothing to commit). Parts 1 and 2 are committed there. The later parts each get their own branch.
+
+## Branches
+
+One branch per slice, merged back to `main` before the next slice that depends on it. Commands below assume Git Bash at the repository root.
+
+| Branch | Parts | Cut it from | Merge it before |
+|---|---|---|---|
+| *(stay on `main`)* | 1, 2, then 7, 9, 10 | — | — |
+| `step-0-docker` | 3 | `main` | `step-0-server` |
+| `step-0-shared` | 4 | `main` | `step-0-server` and `step-0-client` |
+| `step-0-server` | 5, 8 | `main`, after `step-0-shared` and `step-0-docker` are merged | `step-0-prod` and Part 7 |
+| `step-0-client` | 6 | `main`, after `step-0-shared` is merged | `step-0-prod` and Part 7 |
+| `step-0-prod` | 11 | `main`, after `step-0-server` and `step-0-client` are merged | the production rehearsal in the checklist |
+
+`step-0-docker` and `step-0-shared` can be built at the same time, from two checkouts or one after the other. `step-0-server` and `step-0-client` can too, once `shared` is on `main`. Part 7 (`npm install` at the root) waits until `shared`, `server`, and `client` are all merged: the root `package.json` lists all three workspaces, and install fails while any of them is missing.
+
+Each part below repeats the checkout. At the end of a branch, commit only that part's files, then merge:
+
+```bash
+git status          # confirm server/.env, client/.env.local and deploy/production.env are NOT listed
+git add -A
+git commit -m "the message shown in that part"
+git checkout main
+git merge <branch>
+```
 
 ## ⚠️ Important: keep Docker Desktop running
 
@@ -90,6 +115,8 @@ npm **workspaces** mean there's one `node_modules/` and one `package-lock.json` 
 
 ## Part 1: clean up the old server
 
+**Branch:** `main`. This part and Part 2 are the root workspace. Commit them on `main` before cutting any `step-0-*` branch.
+
 The old Express/Socket.IO dependencies are replaced. The old code itself was already deleted (you can still read it with `git show 42ab038:server/index.js`).
 
 ```bash
@@ -103,6 +130,8 @@ Leave `server/.env` and `server/.env.example` for now; you'll overwrite them in 
 ---
 
 ## Part 2: root files
+
+**Branch:** `main`. Commit when the checkpoint at the end of this part passes: `git commit -m "Add the root workspace files"`.
 
 Create each file below at the repository root.
 
@@ -249,6 +278,15 @@ deploy/production.env
 
 ## Part 3: Docker (Postgres + Mailpit)
 
+**Branch:** `step-0-docker`, cut from `main`. It does not need `shared`. The production stack is Part 11, on a later branch.
+
+```bash
+git checkout main
+git checkout -b step-0-docker
+```
+
+After the checkpoint below: `git commit -m "Add Postgres and Mailpit for local development"`, then `git checkout main && git merge step-0-docker`.
+
 ### `docker-compose.yml`
 
 **Path:** `D:/Projects/socket-learning/docker-compose.yml`
@@ -313,6 +351,17 @@ docker compose ps
 ---
 
 ## Part 4: the shared package
+
+**Branch:** `step-0-shared`, cut from `main`. It can be built in parallel with `step-0-docker`.
+
+```bash
+git checkout main
+git checkout -b step-0-shared
+```
+
+Don't run `npm install` on this branch. The root workspace list also names `server` and `client`, which don't exist yet. Tests for this package run in Part 10, after Part 7.
+
+After the files below are in place: `git commit -m "Add the shared package"`, then `git checkout main && git merge step-0-shared`.
 
 ```bash
 mkdir -p shared/src
@@ -403,6 +452,15 @@ describe('@watchparty/shared', () => {
 ---
 
 ## Part 5: the server package
+
+**Branch:** `step-0-server`, cut from `main` after `step-0-shared` and `step-0-docker` are merged. Part 8 (the root ESLint config) is committed on this same branch, after Part 7 has installed the ESLint packages on `main`. Come back to that file once Part 7 is done; the server source itself is this part.
+
+```bash
+git checkout main
+git checkout -b step-0-server
+```
+
+`npm install` still waits for Part 7, because `client/package.json` is not on this branch. Writing the files is enough to commit: `git commit -m "Add the server package"`. Merge to `main` before Part 7. If `step-0-client` is open at the same time, merge both, then run Part 7 once.
 
 ```bash
 mkdir -p server/src/http server/prisma server/test
@@ -718,6 +776,15 @@ Why this way: without any models there's no Prisma client to query with, but `pr
 ---
 
 ## Part 6: the client package (Next.js)
+
+**Branch:** `step-0-client`, cut from `main` after `step-0-shared` is merged. It does not need the server branch. The client's own `eslint.config.mjs` belongs here. The root `eslint.config.js` belongs on `step-0-server` (Part 8).
+
+```bash
+git checkout main
+git checkout -b step-0-client
+```
+
+Same install rule as the server branch: commit the files (`git commit -m "Add the Next.js app"`), merge to `main`, and run Part 7 only once both branches are merged.
 
 ### Scaffold
 
@@ -1091,6 +1158,12 @@ Why two checks: they prove the two ways the frontend reaches the backend. The fi
 
 ## Part 7: install everything
 
+**Branch:** `main`, after `step-0-shared`, `step-0-server`, and `step-0-client` are merged. `step-0-docker` should be merged too, so the database test in Part 10 has a Postgres to reach.
+
+```bash
+git checkout main
+```
+
 Now every workspace has a `package.json`, so install from the root. Run these one by one.
 
 ```bash
@@ -1133,6 +1206,15 @@ Why the pinned majors: Prisma 6 because Prisma 7 changes how the client is gener
 
 ## Part 8: ESLint for server and shared
 
+**Branch:** `step-0-server`. Part 7 installed the root ESLint packages on `main`, so update the branch before adding this file:
+
+```bash
+git checkout step-0-server
+git merge main
+```
+
+Commit `eslint.config.js` on that branch (`git commit -m "Lint the server and shared packages"`), then merge `step-0-server` into `main` again. The client keeps the config from Part 6.
+
 ### `eslint.config.js`
 
 **Path:** `D:/Projects/socket-learning/eslint.config.js`
@@ -1161,6 +1243,8 @@ Why the root ignores `client/`: the client has its own Next.js ESLint config (Pa
 
 ## Part 9: README
 
+**Branch:** `main`, after Part 11 is merged and Part 10 passes.
+
 `README.md` (at `D:/Projects/socket-learning/README.md`) already describes the new stack, the docs and the run commands. Once Parts 10 and 11 pass, make two small edits:
 
 - In **Status**, replace the "Next up is step 0" sentence with "Step 0 (dev setup) is done; next up is step 1 (WebSocket core and chat)."
@@ -1169,6 +1253,8 @@ Why the root ignores `client/`: the client has its own Next.js ESLint config (Pa
 ---
 
 ## Part 10: verify step 0
+
+**Branch:** `main`, after Part 7 and Part 8. Leave the `npm run prod:up` check in the [checklist](#step-0-checklist) until Part 11 is merged.
 
 Run each check. All of them should pass.
 
@@ -1212,6 +1298,15 @@ npm run build
 ---
 
 ## Part 11: production stack in Docker
+
+**Branch:** `step-0-prod`, cut from `main` after `step-0-server` and `step-0-client` are merged (Part 7 has run, so the lockfile exists for the image builds).
+
+```bash
+git checkout main
+git checkout -b step-0-prod
+```
+
+After the rehearsal checkpoint: `git commit -m "Run the production stack in Docker"`, then `git checkout main && git merge step-0-prod`. Then do the `npm run prod:up` line in the checklist, and Part 9.
 
 In production everything runs in Docker on one machine. Caddy is the only container with published ports. It sends `/auth/*`, `/api/*`, `/ws` and `/health` to the server and everything else to Next.js, and it handles HTTPS automatically once you give it a real domain. Here you'll build it and run a **local rehearsal** on `http://localhost`.
 
@@ -1552,10 +1647,12 @@ npm run prod:down
 
 ## Commit
 
+Each part commits on its own branch. The message is in that part's branch note. There is no single commit for all of step 0.
+
+Before every commit:
+
 ```bash
-git add -A
 git status          # make sure server/.env, client/.env.local and deploy/production.env are NOT listed
-git commit -m "Set up workspaces, TypeScript, Docker, Next.js, Vitest, ESLint and the production stack"
 ```
 
 ---
